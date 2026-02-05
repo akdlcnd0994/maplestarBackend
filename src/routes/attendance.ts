@@ -9,44 +9,64 @@ export const attendanceRoutes = new Hono<{ Bindings: Env }>();
 // 오전 5시 기준으로 하루가 바뀜 (5시 이전이면 전날 날짜)
 function getTodayKST(): string {
   const now = new Date();
-  const kst = new Date(now.getTime() + (9 * 60 * 60 * 1000));
+  // KST = UTC + 9시간
+  const kstTime = now.getTime() + (9 * 60 * 60 * 1000);
+  const kstDate = new Date(kstTime);
+
+  // UTC 메서드를 명시적으로 사용하여 타임존 문제 방지
+  const hours = kstDate.getUTCHours();
 
   // 오전 5시 이전이면 전날로 처리
-  if (kst.getHours() < 5) {
-    kst.setDate(kst.getDate() - 1);
+  if (hours < 5) {
+    kstDate.setUTCDate(kstDate.getUTCDate() - 1);
   }
 
-  return kst.toISOString().split('T')[0];
+  const year = kstDate.getUTCFullYear();
+  const month = String(kstDate.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(kstDate.getUTCDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
 }
 
 // 한국 시간 기준 어제 날짜 (오전 5시 기준)
 function getYesterdayKST(): string {
   const now = new Date();
-  const kst = new Date(now.getTime() + (9 * 60 * 60 * 1000));
+  const kstTime = now.getTime() + (9 * 60 * 60 * 1000);
+  const kstDate = new Date(kstTime);
+
+  const hours = kstDate.getUTCHours();
 
   // 오전 5시 이전이면 전날로 처리
-  if (kst.getHours() < 5) {
-    kst.setDate(kst.getDate() - 1);
+  if (hours < 5) {
+    kstDate.setUTCDate(kstDate.getUTCDate() - 1);
   }
 
   // 그리고 하루 더 빼서 어제 날짜
-  kst.setDate(kst.getDate() - 1);
-  return kst.toISOString().split('T')[0];
+  kstDate.setUTCDate(kstDate.getUTCDate() - 1);
+
+  const year = kstDate.getUTCFullYear();
+  const month = String(kstDate.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(kstDate.getUTCDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
 }
 
 // 한국 시간 기준 현재 년/월 (오전 5시 기준)
 function getCurrentYearMonthKST(): { year: number; month: number } {
   const now = new Date();
-  const kst = new Date(now.getTime() + (9 * 60 * 60 * 1000));
+  const kstTime = now.getTime() + (9 * 60 * 60 * 1000);
+  const kstDate = new Date(kstTime);
+
+  const hours = kstDate.getUTCHours();
 
   // 오전 5시 이전이면 전날로 처리
-  if (kst.getHours() < 5) {
-    kst.setDate(kst.getDate() - 1);
+  if (hours < 5) {
+    kstDate.setUTCDate(kstDate.getUTCDate() - 1);
   }
 
   return {
-    year: kst.getFullYear(),
-    month: kst.getMonth() + 1
+    year: kstDate.getUTCFullYear(),
+    month: kstDate.getUTCMonth() + 1
   };
 }
 

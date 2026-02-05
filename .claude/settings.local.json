@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:maplestar.app)",
+      "Bash(dir:*)",
+      "Bash(tree:*)",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_click",
+      "mcp__playwright__browser_fill_form",
+      "mcp__playwright__browser_snapshot",
+      "mcp__playwright__browser_wait_for",
+      "mcp__playwright__browser_run_code",
+      "mcp__playwright__browser_tabs",
+      "mcp__playwright__browser_console_messages",
+      "mcp__playwright__browser_evaluate",
+      "mcp__playwright__browser_press_key",
+      "Bash(npm run dev:*)",
+      "Bash(npx wrangler d1 execute:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)"
+    ]
+  },
+  "enabledPlugins": {
+    "claude-hud@claude-hud": true
+  }
+}

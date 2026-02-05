@@ -27,29 +27,24 @@ export const incubatorRoutes = new Hono<{ Bindings: Bindings; Variables: Variabl
 
 // 경쟁모드 부스트 설정 (고정 확률)
 // ID 9: 이노센트 -> 1%
-// ID 23: 혼줌 60% -> 1%
-// ID 139: 장공 10% -> 0.8%
-// ID 49: 장공 60% -> 0.8%
-// ID 140: 장공 100% -> 1%
-// ID 134: 백줌 5% -> 3.6%
-// ID 130: 백줌 10% -> 3%
-// ID 117: 백줌 20% -> 1.5%
-const COMPETITION_BOOST_RATES: { [key: number]: number } = {
-  9: 1,      // 이노센트
-  23: 1,     // 혼줌 60%
-  139: 0.8,  // 장공 10%
-  49: 0.8,   // 장공 60%
-  140: 1,    // 장공 100%
-  134: 3.6,  // 백줌 5%
-  130: 3,    // 백줌 10%
-  117: 1.5,  // 백줌 20%
-};
-
-const getCompetitionBoostRate = (id: number, baseRate: number): number => {
-  return COMPETITION_BOOST_RATES[id] ?? baseRate;
-};
-
+// 경쟁모드용 주문서 ID 목록
+// ID 9: 이노센트
+// ID 23: 혼줌 60%
+// ID 139: 장공 10%
+// ID 49: 장공 60%
+// ID 140: 장공 100%
+// ID 134: 백줌 5%
+// ID 130: 백줌 10%
+// ID 117: 백줌 20%
 const COMPETITION_SCROLL_IDS = [9, 23, 49, 117, 130, 134, 139, 140];
+
+// 경쟁모드 부스트 시 해당 주문서 확률 2배 적용
+const getCompetitionBoostRate = (id: number, baseRate: number): number => {
+  if (COMPETITION_SCROLL_IDS.includes(id)) {
+    return baseRate * 2; // 2배 적용
+  }
+  return baseRate;
+};
 
 // 서버 사이드 확률 계산 함수
 async function getRandomItem(db: D1Database, competitionBoost: boolean = false): Promise<IncubatorItem> {
@@ -62,10 +57,10 @@ async function getRandomItem(db: D1Database, competitionBoost: boolean = false):
     throw new Error('No items found in database');
   }
 
-  // 경쟁모드 부스트 적용 시 주문서별 다른 배율 적용
+  // 경쟁모드 부스트 적용 시 경쟁용 주문서 확률 2배 적용
   const adjustedItems = items.map(item => ({
     ...item,
-    rate: competitionBoost && COMPETITION_SCROLL_IDS.includes(item.id)
+    rate: competitionBoost
       ? getCompetitionBoostRate(item.id, item.rate)
       : item.rate
   }));
@@ -501,10 +496,11 @@ incubatorRoutes.post('/competition/glove/records', authMiddleware, async (c) => 
 incubatorRoutes.get('/competition/chaos/rankings', async (c) => {
   const limit = parseInt(c.req.query('limit') || '20');
   const statType = c.req.query('stat_type') || 'atk'; // 'atk' or 'matk'
+  const upgradeCount = c.req.query('upgrade_count') ? parseInt(c.req.query('upgrade_count')!) : null;
 
   try {
     const orderColumn = statType === 'matk' ? 'matk' : 'atk';
-    const { results } = await c.env.DB.prepare(`
+    let query = `
       SELECT
         u.character_name,
         u.username,
@@ -517,11 +513,18 @@ incubatorRoutes.get('/competition/chaos/rankings', async (c) => {
         r.created_at
       FROM competition_chaos_records r
       JOIN users u ON r.user_id = u.id
-      ORDER BY r.${orderColumn} DESC
-      LIMIT ?
-    `).bind(limit).all();
+    `;
 
-    return success(c, results || []);
+    if (upgradeCount) {
+      query += ` WHERE r.upgrade_count = ?`;
+      query += ` ORDER BY r.${orderColumn} DESC LIMIT ?`;
+      const { results } = await c.env.DB.prepare(query).bind(upgradeCount, limit).all();
+      return success(c, results || []);
+    } else {
+      query += ` ORDER BY r.${orderColumn} DESC LIMIT ?`;
+      const { results } = await c.env.DB.prepare(query).bind(limit).all();
+      return success(c, results || []);
+    }
   } catch (e: any) {
     console.error('Error fetching competition chaos rankings:', e);
     return error(c, 'SERVER_ERROR', '랭킹을 불러오지 못했습니다.', 500);
@@ -535,10 +538,10 @@ incubatorRoutes.post('/competition/chaos/records', authMiddleware, async (c) => 
   const { atk, matk, upgradeCount, chaosUsed, innocentUsed, whiteUsed } = body;
 
   try {
-    // 기존 기록 확인 (공격력 기준)
+    // 기존 기록 확인 (user_id + upgrade_count 조합으로 조회)
     const existing = await c.env.DB.prepare(`
-      SELECT id, atk, matk FROM competition_chaos_records WHERE user_id = ?
-    `).bind(user.userId).first<{ id: number; atk: number; matk: number }>();
+      SELECT id, atk, matk FROM competition_chaos_records WHERE user_id = ? AND upgrade_count = ?
+    `).bind(user.userId, upgradeCount).first<{ id: number; atk: number; matk: number }>();
 
     // 공격력 또는 마력이 더 높으면 업데이트
     const shouldUpdate = !existing || atk > existing.atk || matk > existing.matk;
@@ -550,9 +553,9 @@ incubatorRoutes.post('/competition/chaos/records', authMiddleware, async (c) => 
         const newMatk = Math.max(matk, existing.matk);
         await c.env.DB.prepare(`
           UPDATE competition_chaos_records
-          SET atk = ?, matk = ?, upgrade_count = ?, chaos_used = ?, innocent_used = ?, white_used = ?, created_at = datetime('now')
-          WHERE user_id = ?
-        `).bind(newAtk, newMatk, upgradeCount, chaosUsed || 0, innocentUsed || 0, whiteUsed || 0, user.userId).run();
+          SET atk = ?, matk = ?, chaos_used = ?, innocent_used = ?, white_used = ?, created_at = datetime('now')
+          WHERE user_id = ? AND upgrade_count = ?
+        `).bind(newAtk, newMatk, chaosUsed || 0, innocentUsed || 0, whiteUsed || 0, user.userId, upgradeCount).run();
       } else {
         await c.env.DB.prepare(`
           INSERT INTO competition_chaos_records (user_id, atk, matk, upgrade_count, chaos_used, innocent_used, white_used)
