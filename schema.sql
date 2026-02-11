@@ -303,6 +303,22 @@ CREATE INDEX IF NOT EXISTS idx_incubator_inventory_user ON incubator_inventory(u
 CREATE INDEX IF NOT EXISTS idx_incubator_history_user ON incubator_history(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_incubator_daily_stats_user_date ON incubator_daily_stats(user_id, hatch_date);
 
+-- 랭킹 캐릭터 테이블 (maplestar.io 스크래핑 데이터)
+CREATE TABLE IF NOT EXISTS ranking_characters (
+    userindex INTEGER PRIMARY KEY AUTOINCREMENT,
+    userrank INTEGER NOT NULL,
+    username TEXT NOT NULL,
+    userlevel INTEGER NOT NULL,
+    userjob TEXT NOT NULL,
+    userguild TEXT DEFAULT '',
+    userdate TEXT NOT NULL,
+    usertime TEXT NOT NULL,
+    usercode TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ranking_username ON ranking_characters(username);
+CREATE INDEX IF NOT EXISTS idx_ranking_usercode ON ranking_characters(usercode);
+
 -- 초기 데이터 삽입
 INSERT OR IGNORE INTO board_categories (slug, name, description) VALUES
 ('showoff', '템자랑', '장비 자랑 게시판'),

@@ -12,6 +12,7 @@ import { gameRoutes } from './routes/games';
 import { scrollRoutes } from './routes/scrolls';
 import { chaosRoutes } from './routes/chaos';
 import { incubatorRoutes } from './routes/incubator';
+import { rankingRoutes, scrapeAllRankings } from './routes/ranking';
 
 export interface Env {
   DB: D1Database;
@@ -45,6 +46,7 @@ app.route('/api/games', gameRoutes);
 app.route('/api/scrolls', scrollRoutes);
 app.route('/api/chaos', chaosRoutes);
 app.route('/api/incubator', incubatorRoutes);
+app.route('/api/ranking', rankingRoutes);
 
 // 이미지 서빙 (R2)
 app.get('/api/images/*', async (c) => {
@@ -87,4 +89,11 @@ app.onError((err, c) => {
   return c.json({ success: false, error: { code: 'INTERNAL_ERROR', message: err.message } }, 500);
 });
 
-export default app;
+export default {
+  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    return app.fetch(request, env, ctx);
+  },
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(scrapeAllRankings(env.DB));
+  },
+};

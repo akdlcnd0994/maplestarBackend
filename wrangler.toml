@@ -15,6 +15,9 @@ database_id = "3742ee92-8693-4e3c-afd7-156b14a0c539"
 binding = "BUCKET"
 bucket_name = "maplestar-guild-images"
 
+[triggers]
+crons = ["0 * * * *"]
+
 [dev]
 port = 8787
 local_protocol = "http"
