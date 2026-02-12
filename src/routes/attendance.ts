@@ -89,10 +89,7 @@ attendanceRoutes.get('/', authMiddleware, async (c) => {
       ORDER BY check_date ASC
     `).bind(userId, startDate, endDate).all();
 
-    return success(c, {
-      server_today: getTodayKST(),
-      records: attendance.results,
-    });
+    return success(c, attendance.results);
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
