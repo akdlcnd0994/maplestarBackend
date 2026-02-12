@@ -89,7 +89,10 @@ attendanceRoutes.get('/', authMiddleware, async (c) => {
       ORDER BY check_date ASC
     `).bind(userId, startDate, endDate).all();
 
-    return success(c, attendance.results);
+    return success(c, {
+      server_today: getTodayKST(),
+      records: attendance.results,
+    });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
@@ -164,16 +167,24 @@ attendanceRoutes.get('/stats', authMiddleware, async (c) => {
       'SELECT * FROM attendance_stats WHERE user_id = ?'
     ).bind(userId).first();
 
+    const today = getTodayKST();
+
     if (!stats) {
       return success(c, {
         total_checks: 0,
         current_streak: 0,
         max_streak: 0,
         last_check_date: null,
+        server_today: today,
+        checked_today: false,
       });
     }
 
-    return success(c, stats);
+    return success(c, {
+      ...stats,
+      server_today: today,
+      checked_today: stats.last_check_date === today,
+    });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }

@@ -25,7 +25,7 @@ const app = new Hono<{ Bindings: Env }>();
 
 // CORS 설정
 app.use('*', cors({
-  origin: ['https://maplestar.app', 'https://www.maplestar.app', 'https://maplestar-guild-rw4.pages.dev', 'http://localhost:5173'],
+  origin: ['https://maplestar.app', 'https://www.maplestar.app', 'https://maplestar-guild-rw4.pages.dev', 'http://localhost:5173', 'https://api.maplestar.app'],
   credentials: true,
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
@@ -62,7 +62,7 @@ app.get('/api/images/*', async (c) => {
     }
 
     const origin = c.req.header('Origin') || '';
-    const allowedOrigins = ['https://maplestar.app', 'https://www.maplestar.app', 'https://maplestar-guild-rw4.pages.dev', 'http://localhost:5173'];
+    const allowedOrigins = ['https://maplestar.app', 'https://www.maplestar.app', 'https://maplestar-guild-rw4.pages.dev', 'http://localhost:5173', 'https://api.maplestar.app'];
     const corsOrigin = allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
 
     const headers = new Headers();
