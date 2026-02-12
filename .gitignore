@@ -1,0 +1,11 @@
+node_modules/
+.wrangler/
+.idea/
+.playwright-mcp/
+*.sql
+*.png
+*.py
+check-*.js
+import-*.js
+db-*
+nul

@@ -9,7 +9,7 @@ ENVIRONMENT = "production"
 [[d1_databases]]
 binding = "DB"
 database_name = "guild-db"
-database_id = "3742ee92-8693-4e3c-afd7-156b14a0c539"
+database_id = "83397dc6-14ed-40b1-bdf3-fc9f90dfa783"
 
 [[r2_buckets]]
 binding = "BUCKET"

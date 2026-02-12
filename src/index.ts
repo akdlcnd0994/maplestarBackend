@@ -25,7 +25,7 @@ const app = new Hono<{ Bindings: Env }>();
 
 // CORS 설정
 app.use('*', cors({
-  origin: ['https://maplestar.app', 'https://www.maplestar.app', 'http://localhost:5173'],
+  origin: ['https://maplestar.app', 'https://www.maplestar.app', 'https://maplestar-guild-rw4.pages.dev', 'http://localhost:5173'],
   credentials: true,
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
@@ -62,7 +62,7 @@ app.get('/api/images/*', async (c) => {
     }
 
     const origin = c.req.header('Origin') || '';
-    const allowedOrigins = ['https://maplestar.app', 'https://www.maplestar.app', 'http://localhost:5173'];
+    const allowedOrigins = ['https://maplestar.app', 'https://www.maplestar.app', 'https://maplestar-guild-rw4.pages.dev', 'http://localhost:5173'];
     const corsOrigin = allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
 
     const headers = new Headers();
@@ -94,6 +94,9 @@ export default {
     return app.fetch(request, env, ctx);
   },
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(scrapeAllRankings(env.DB));
+    // 매시 정각 실행, 시간 기반으로 배치 인덱스 결정 (11개 배치 순환)
+    const hour = new Date(event.scheduledTime).getUTCHours();
+    const batchIndex = hour % 11;
+    ctx.waitUntil(scrapeAllRankings(env.DB, batchIndex));
   },
 };

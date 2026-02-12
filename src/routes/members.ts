@@ -84,22 +84,83 @@ memberRoutes.get('/', async (c) => {
         usercodes.add(r.usercode);
       }
 
-      // 동일 usercode를 가진 부캐릭터 조회
-      let altMap = new Map<string, any[]>();
-      if (usercodes.size > 0) {
-        const codeArr = [...usercodes];
-        const codePlaceholders = codeArr.map(() => '?').join(',');
-        const altData = await c.env.DB.prepare(
-          `SELECT username, userlevel, userjob, userrank, usercode FROM ranking_characters WHERE usercode IN (${codePlaceholders}) ORDER BY userlevel DESC`
-        )
-          .bind(...codeArr)
-          .all();
+      // 코드 히스토리 기반 부캐릭터 조회 (영구 연결)
+      // 1. 멤버 이름으로 히스토리에서 모든 usercode 조회
+      const memberNames = memberList.map((m: any) => m.character_name);
+      const memberNamePlaceholders = memberNames.map(() => '?').join(',');
+      const memberCodeHistory = await c.env.DB.prepare(
+        `SELECT username, usercode FROM character_code_history WHERE username IN (${memberNamePlaceholders})`
+      ).bind(...memberNames).all();
 
-        for (const alt of altData.results as any[]) {
-          if (!altMap.has(alt.usercode)) {
-            altMap.set(alt.usercode, []);
+      // 멤버별 usercode 목록
+      const memberCodesMap = new Map<string, Set<string>>();
+      for (const row of memberCodeHistory.results as any[]) {
+        if (!memberCodesMap.has(row.username)) {
+          memberCodesMap.set(row.username, new Set());
+        }
+        memberCodesMap.get(row.username)!.add(row.usercode);
+      }
+
+      // 2. 모든 관련 usercode로 연결된 캐릭터 조회
+      const allCodes = new Set<string>();
+      for (const codes of memberCodesMap.values()) {
+        for (const code of codes) allCodes.add(code);
+      }
+      // ranking_characters의 현재 usercode도 포함
+      for (const r of rankingData.results as any[]) {
+        allCodes.add(r.usercode);
+      }
+
+      let altMap = new Map<string, any[]>(); // usercode → characters
+      if (allCodes.size > 0) {
+        const codeArr = [...allCodes];
+        const codePlaceholders = codeArr.map(() => '?').join(',');
+
+        // 히스토리에서 해당 코드를 가진 모든 캐릭터명 조회
+        const linkedNames = await c.env.DB.prepare(
+          `SELECT DISTINCT username, usercode FROM character_code_history WHERE usercode IN (${codePlaceholders})`
+        ).bind(...codeArr).all();
+
+        // usercode별 연결된 캐릭터명 맵
+        const codeToNames = new Map<string, Set<string>>();
+        for (const row of linkedNames.results as any[]) {
+          if (!codeToNames.has(row.usercode)) {
+            codeToNames.set(row.usercode, new Set());
           }
-          altMap.get(alt.usercode)!.push(alt);
+          codeToNames.get(row.usercode)!.add(row.username);
+        }
+
+        // 연결된 모든 캐릭터의 랭킹 데이터 조회
+        const allLinkedNames = new Set<string>();
+        for (const names of codeToNames.values()) {
+          for (const name of names) allLinkedNames.add(name);
+        }
+
+        if (allLinkedNames.size > 0) {
+          const nameArr = [...allLinkedNames];
+          const namePlaceholders = nameArr.map(() => '?').join(',');
+          const altData = await c.env.DB.prepare(
+            `SELECT username, userlevel, userjob, userrank, usercode FROM ranking_characters WHERE username IN (${namePlaceholders}) ORDER BY userlevel DESC`
+          ).bind(...nameArr).all();
+
+          for (const alt of altData.results as any[]) {
+            // 현재 usercode와 히스토리 usercode 모두로 매핑
+            if (!altMap.has(alt.usercode)) {
+              altMap.set(alt.usercode, []);
+            }
+            altMap.get(alt.usercode)!.push(alt);
+          }
+
+          // 히스토리 코드로도 매핑 (코드 변경 시 연결 유지)
+          for (const [code, names] of codeToNames) {
+            for (const name of names) {
+              const charData = (altData.results as any[]).find((a: any) => a.username === name);
+              if (charData && !altMap.get(code)?.some((a: any) => a.username === name)) {
+                if (!altMap.has(code)) altMap.set(code, []);
+                altMap.get(code)!.push(charData);
+              }
+            }
+          }
         }
       }
 
@@ -111,9 +172,31 @@ memberRoutes.get('/', async (c) => {
           member.ranking_job = ranking.userjob;
           member.ranking_rank = ranking.userrank;
           member.ranking_guild = ranking.userguild;
-          // 같은 계정의 다른 캐릭터 (본인 제외)
-          const allChars = altMap.get(ranking.usercode) || [];
-          member.alt_characters = allChars.filter((a: any) => a.username !== member.character_name);
+
+          // 히스토리 기반 부캐 조회: 해당 멤버의 모든 usercode로 연결된 캐릭터
+          const memberCodes = memberCodesMap.get(member.character_name) || new Set([ranking.usercode]);
+          const altSet = new Set<string>();
+          const altList: any[] = [];
+          for (const code of memberCodes) {
+            const chars = altMap.get(code) || [];
+            for (const ch of chars) {
+              if (ch.username !== member.character_name && !altSet.has(ch.username)) {
+                altSet.add(ch.username);
+                altList.push(ch);
+              }
+            }
+          }
+          // 현재 usercode로도 조회
+          if (!memberCodes.has(ranking.usercode)) {
+            const chars = altMap.get(ranking.usercode) || [];
+            for (const ch of chars) {
+              if (ch.username !== member.character_name && !altSet.has(ch.username)) {
+                altSet.add(ch.username);
+                altList.push(ch);
+              }
+            }
+          }
+          member.alt_characters = altList.sort((a: any, b: any) => b.userlevel - a.userlevel);
         } else {
           member.ranking_level = null;
           member.ranking_job = null;
@@ -168,13 +251,30 @@ memberRoutes.get('/:id', async (c) => {
       memberData.ranking_rank = ranking.userrank;
       memberData.ranking_guild = ranking.userguild;
 
-      const alts = await c.env.DB.prepare(
-        'SELECT username, userlevel, userjob, userrank FROM ranking_characters WHERE usercode = ? AND username != ? ORDER BY userlevel DESC'
-      )
-        .bind(ranking.usercode, memberData.character_name)
-        .all();
+      // 히스토리 기반 부캐 조회 (영구 연결)
+      const codeHistory = await c.env.DB.prepare(
+        'SELECT DISTINCT usercode FROM character_code_history WHERE username = ?'
+      ).bind(memberData.character_name).all();
 
-      memberData.alt_characters = alts.results;
+      const codes = (codeHistory.results as any[]).map((r: any) => r.usercode);
+      if (!codes.includes(ranking.usercode)) codes.push(ranking.usercode);
+
+      const codePlaceholders = codes.map(() => '?').join(',');
+      const linkedNames = await c.env.DB.prepare(
+        `SELECT DISTINCT username FROM character_code_history WHERE usercode IN (${codePlaceholders})`
+      ).bind(...codes).all();
+
+      const allNames = (linkedNames.results as any[]).map((r: any) => r.username).filter((n: string) => n !== memberData.character_name);
+
+      if (allNames.length > 0) {
+        const namePlaceholders = allNames.map(() => '?').join(',');
+        const alts = await c.env.DB.prepare(
+          `SELECT username, userlevel, userjob, userrank FROM ranking_characters WHERE username IN (${namePlaceholders}) ORDER BY userlevel DESC`
+        ).bind(...allNames).all();
+        memberData.alt_characters = alts.results;
+      } else {
+        memberData.alt_characters = [];
+      }
     } else {
       memberData.ranking_level = null;
       memberData.ranking_job = null;
