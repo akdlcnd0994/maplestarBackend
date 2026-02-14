@@ -1,6 +1,6 @@
 import { Context, Next } from 'hono';
 import { verifyJWTWithStatus } from '../utils/jwt';
-import { error } from '../utils/response';
+import { error, forbidden } from '../utils/response';
 
 export interface AuthUser {
   userId: number;
@@ -21,7 +21,7 @@ export async function authMiddleware(c: Context, next: Next) {
   }
 
   const token = authHeader.substring(7);
-  const secret = c.env.JWT_SECRET || 'dev-secret-key-change-in-production';
+  const secret = c.env.JWT_SECRET;
 
   const result = await verifyJWTWithStatus(token, secret);
 
@@ -46,7 +46,7 @@ export async function optionalAuthMiddleware(c: Context, next: Next) {
   const authHeader = c.req.header('Authorization');
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.substring(7);
-    const secret = c.env.JWT_SECRET || 'dev-secret-key-change-in-production';
+    const secret = c.env.JWT_SECRET;
     const result = await verifyJWTWithStatus(token, secret);
     if (result.status === 'valid') {
       c.set('user', {
@@ -63,7 +63,7 @@ export function requireRole(...roles: string[]) {
   return async (c: Context, next: Next) => {
     const user = c.get('user');
     if (!user || !roles.includes(user.role)) {
-      return unauthorized(c, '권한이 없습니다.');
+      return forbidden(c, '권한이 없습니다.');
     }
     await next();
   };

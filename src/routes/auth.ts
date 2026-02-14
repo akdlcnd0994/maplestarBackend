@@ -92,7 +92,7 @@ authRoutes.post('/login', async (c) => {
       'UPDATE users SET last_login_at = datetime("now"), is_online = 1 WHERE id = ?'
     ).bind(user.id).run();
 
-    const secret = c.env.JWT_SECRET || 'dev-secret-key-change-in-production';
+    const secret = c.env.JWT_SECRET;
     const token = await signJWT({
       userId: user.id,
       username: user.username,

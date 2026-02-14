@@ -2,16 +2,14 @@ import { Hono } from 'hono';
 import { Env } from '../index';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { success, error, notFound } from '../utils/response';
+import { getTodayKST } from '../utils/date';
 
 export const eventRoutes = new Hono<{ Bindings: Env }>();
 
 // 이벤트 목록
 eventRoutes.get('/', async (c) => {
   try {
-    // 한국 시간 기준 (UTC+9)으로 오늘 날짜 계산
-    const now = new Date();
-    const koreaTime = new Date(now.getTime() + (9 * 60 * 60 * 1000));
-    const today = koreaTime.toISOString().split('T')[0];
+    const today = getTodayKST();
 
     const events = await c.env.DB.prepare(`
       SELECT * FROM events
@@ -38,7 +36,6 @@ eventRoutes.get('/:id', async (c) => {
       return notFound(c, '이벤트를 찾을 수 없습니다.');
     }
 
-    // 참가자 목록
     const participants = await c.env.DB.prepare(`
       SELECT ep.*, u.character_name, u.job, u.level
       FROM event_participants ep
@@ -48,13 +45,9 @@ eventRoutes.get('/:id', async (c) => {
 
     return success(c, {
       ...event,
-      participants: participants.results.map(p => ({
-        id: p.id,
-        user_id: p.user_id,
-        character_name: p.character_name,
-        job: p.job,
-        level: p.level,
-        status: p.status,
+      participants: participants.results.map((p: any) => ({
+        id: p.id, user_id: p.user_id, character_name: p.character_name,
+        job: p.job, level: p.level, status: p.status,
       })),
     });
   } catch (e: any) {
@@ -62,7 +55,7 @@ eventRoutes.get('/:id', async (c) => {
   }
 });
 
-// 이벤트 참가 신청
+// 이벤트 참가 신청/취소
 eventRoutes.post('/:id/join', authMiddleware, async (c) => {
   try {
     const { userId } = c.get('user');
@@ -76,37 +69,26 @@ eventRoutes.post('/:id/join', authMiddleware, async (c) => {
       return notFound(c, '이벤트를 찾을 수 없습니다.');
     }
 
-    // 이미 참가했는지 확인
     const existing = await c.env.DB.prepare(
       'SELECT id FROM event_participants WHERE event_id = ? AND user_id = ?'
     ).bind(id, userId).first();
 
     if (existing) {
-      // 참가 취소
-      await c.env.DB.prepare(
-        'DELETE FROM event_participants WHERE event_id = ? AND user_id = ?'
-      ).bind(id, userId).run();
-
-      await c.env.DB.prepare(
-        'UPDATE events SET current_participants = current_participants - 1 WHERE id = ?'
-      ).bind(id).run();
-
+      await c.env.DB.batch([
+        c.env.DB.prepare('DELETE FROM event_participants WHERE event_id = ? AND user_id = ?').bind(id, userId),
+        c.env.DB.prepare('UPDATE events SET current_participants = current_participants - 1 WHERE id = ?').bind(id),
+      ]);
       return success(c, { joined: false, message: '참가가 취소되었습니다.' });
     }
 
-    // 정원 확인
     if (event.max_participants && event.current_participants >= event.max_participants) {
       return error(c, 'FULL', '정원이 가득 찼습니다.');
     }
 
-    // 참가 등록
-    await c.env.DB.prepare(
-      'INSERT INTO event_participants (event_id, user_id, status) VALUES (?, ?, "confirmed")'
-    ).bind(id, userId).run();
-
-    await c.env.DB.prepare(
-      'UPDATE events SET current_participants = current_participants + 1 WHERE id = ?'
-    ).bind(id).run();
+    await c.env.DB.batch([
+      c.env.DB.prepare('INSERT INTO event_participants (event_id, user_id, status) VALUES (?, ?, "confirmed")').bind(id, userId),
+      c.env.DB.prepare('UPDATE events SET current_participants = current_participants + 1 WHERE id = ?').bind(id),
+    ]);
 
     return success(c, { joined: true, message: '참가 신청이 완료되었습니다!' });
   } catch (e: any) {
@@ -127,14 +109,7 @@ eventRoutes.post('/', authMiddleware, requireRole('master', 'submaster'), async 
     const result = await c.env.DB.prepare(`
       INSERT INTO events (title, description, event_date, event_time, event_type, max_participants, current_participants, is_active)
       VALUES (?, ?, ?, ?, ?, ?, 0, 1)
-    `).bind(
-      title,
-      description || '',
-      event_date,
-      event_time || '20:00',
-      event_type || 'event',
-      max_participants || null
-    ).run();
+    `).bind(title, description || '', event_date, event_time || '20:00', event_type || 'event', max_participants || null).run();
 
     return success(c, { id: result.meta.last_row_id, message: '일정이 등록되었습니다.' });
   } catch (e: any) {
@@ -150,23 +125,12 @@ eventRoutes.put('/:id', authMiddleware, requireRole('master', 'submaster'), asyn
     const { title, description, event_date, event_time, event_type, max_participants, is_active } = body;
 
     const event = await c.env.DB.prepare('SELECT id FROM events WHERE id = ?').bind(id).first();
-    if (!event) {
-      return notFound(c, '이벤트를 찾을 수 없습니다.');
-    }
+    if (!event) return notFound(c, '이벤트를 찾을 수 없습니다.');
 
     await c.env.DB.prepare(`
       UPDATE events SET title = ?, description = ?, event_date = ?, event_time = ?, event_type = ?, max_participants = ?, is_active = ?, updated_at = datetime("now")
       WHERE id = ?
-    `).bind(
-      title,
-      description || '',
-      event_date,
-      event_time || '20:00',
-      event_type || 'event',
-      max_participants || null,
-      is_active !== undefined ? (is_active ? 1 : 0) : 1,
-      id
-    ).run();
+    `).bind(title, description || '', event_date, event_time || '20:00', event_type || 'event', max_participants || null, is_active !== undefined ? (is_active ? 1 : 0) : 1, id).run();
 
     return success(c, { message: '일정이 수정되었습니다.' });
   } catch (e: any) {
@@ -180,14 +144,12 @@ eventRoutes.delete('/:id', authMiddleware, requireRole('master', 'submaster'), a
     const id = c.req.param('id');
 
     const event = await c.env.DB.prepare('SELECT id FROM events WHERE id = ?').bind(id).first();
-    if (!event) {
-      return notFound(c, '이벤트를 찾을 수 없습니다.');
-    }
+    if (!event) return notFound(c, '이벤트를 찾을 수 없습니다.');
 
-    // 참가자 삭제
-    await c.env.DB.prepare('DELETE FROM event_participants WHERE event_id = ?').bind(id).run();
-    // 이벤트 삭제
-    await c.env.DB.prepare('DELETE FROM events WHERE id = ?').bind(id).run();
+    await c.env.DB.batch([
+      c.env.DB.prepare('DELETE FROM event_participants WHERE event_id = ?').bind(id),
+      c.env.DB.prepare('DELETE FROM events WHERE id = ?').bind(id),
+    ]);
 
     return success(c, { message: '일정이 삭제되었습니다.' });
   } catch (e: any) {
@@ -208,16 +170,10 @@ eventRoutes.get('/:id/participants', async (c) => {
       ORDER BY ep.created_at ASC
     `).bind(id).all<any>();
 
-    return success(c, participants.results.map(p => ({
-      id: p.id,
-      user_id: p.user_id,
-      character_name: p.character_name,
-      job: p.job,
-      level: p.level,
-      profile_image: p.profile_image,
-      default_icon: p.default_icon,
-      profile_zoom: p.profile_zoom,
-      status: p.status,
+    return success(c, participants.results.map((p: any) => ({
+      id: p.id, user_id: p.user_id, character_name: p.character_name,
+      job: p.job, level: p.level, profile_image: p.profile_image,
+      default_icon: p.default_icon, profile_zoom: p.profile_zoom, status: p.status,
     })));
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);

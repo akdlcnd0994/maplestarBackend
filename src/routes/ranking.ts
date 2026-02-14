@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env } from '../index';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { success, error } from '../utils/response';
+import { getKSTTimestamp } from '../utils/date';
 
 export const rankingRoutes = new Hono<{ Bindings: Env }>();
 
@@ -80,11 +81,7 @@ function parseRankingHtml(html: string): Array<{ rank: number; name: string; lev
  * batchIndex: 0~10 (운영 배치 모드), undefined면 전체 스크래핑 (로컬/수동)
  */
 export async function scrapeAllRankings(db: D1Database, batchIndex?: number): Promise<{ total: number; errors: number; batch?: number }> {
-  const now = new Date();
-  const kstOffset = 9 * 60 * 60 * 1000;
-  const kst = new Date(now.getTime() + kstOffset);
-  const userdate = kst.toISOString().split('T')[0];
-  const usertime = kst.toISOString().split('T')[1].split('.')[0];
+  const { date: userdate, time: usertime } = getKSTTimestamp();
   const timestamp = `${userdate} ${usertime}`;
 
   // batchIndex가 없으면 전체 스크래핑 (로컬/수동 실행용)

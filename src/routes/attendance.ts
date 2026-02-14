@@ -2,73 +2,9 @@ import { Hono } from 'hono';
 import { Env } from '../index';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { success, error } from '../utils/response';
+import { getTodayKST, getYesterdayKST, getCurrentYearMonthKST } from '../utils/date';
 
 export const attendanceRoutes = new Hono<{ Bindings: Env }>();
-
-// 한국 시간 (KST = UTC+9) 기준 오늘 날짜
-// 오전 5시 기준으로 하루가 바뀜 (5시 이전이면 전날 날짜)
-function getTodayKST(): string {
-  const now = new Date();
-  // KST = UTC + 9시간
-  const kstTime = now.getTime() + (9 * 60 * 60 * 1000);
-  const kstDate = new Date(kstTime);
-
-  // UTC 메서드를 명시적으로 사용하여 타임존 문제 방지
-  const hours = kstDate.getUTCHours();
-
-  // 오전 5시 이전이면 전날로 처리
-  if (hours < 5) {
-    kstDate.setUTCDate(kstDate.getUTCDate() - 1);
-  }
-
-  const year = kstDate.getUTCFullYear();
-  const month = String(kstDate.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(kstDate.getUTCDate()).padStart(2, '0');
-
-  return `${year}-${month}-${day}`;
-}
-
-// 한국 시간 기준 어제 날짜 (오전 5시 기준)
-function getYesterdayKST(): string {
-  const now = new Date();
-  const kstTime = now.getTime() + (9 * 60 * 60 * 1000);
-  const kstDate = new Date(kstTime);
-
-  const hours = kstDate.getUTCHours();
-
-  // 오전 5시 이전이면 전날로 처리
-  if (hours < 5) {
-    kstDate.setUTCDate(kstDate.getUTCDate() - 1);
-  }
-
-  // 그리고 하루 더 빼서 어제 날짜
-  kstDate.setUTCDate(kstDate.getUTCDate() - 1);
-
-  const year = kstDate.getUTCFullYear();
-  const month = String(kstDate.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(kstDate.getUTCDate()).padStart(2, '0');
-
-  return `${year}-${month}-${day}`;
-}
-
-// 한국 시간 기준 현재 년/월 (오전 5시 기준)
-function getCurrentYearMonthKST(): { year: number; month: number } {
-  const now = new Date();
-  const kstTime = now.getTime() + (9 * 60 * 60 * 1000);
-  const kstDate = new Date(kstTime);
-
-  const hours = kstDate.getUTCHours();
-
-  // 오전 5시 이전이면 전날로 처리
-  if (hours < 5) {
-    kstDate.setUTCDate(kstDate.getUTCDate() - 1);
-  }
-
-  return {
-    year: kstDate.getUTCFullYear(),
-    month: kstDate.getUTCMonth() + 1
-  };
-}
 
 // 이번 달 또는 특정 달 출석 현황
 attendanceRoutes.get('/', authMiddleware, async (c) => {
@@ -101,7 +37,6 @@ attendanceRoutes.post('/check', authMiddleware, async (c) => {
     const { userId } = c.get('user');
     const today = getTodayKST();
 
-    // 이미 출석했는지 확인
     const existing = await c.env.DB.prepare(
       'SELECT id FROM attendance WHERE user_id = ? AND check_date = ?'
     ).bind(userId, today).first();
@@ -110,46 +45,43 @@ attendanceRoutes.post('/check', authMiddleware, async (c) => {
       return error(c, 'ALREADY_CHECKED', '이미 출석체크를 완료했습니다.');
     }
 
-    // 어제 출석 여부 확인 (연속 출석 계산) - 한국시간 기준
     const yesterdayStr = getYesterdayKST();
-
     const yesterdayAttendance = await c.env.DB.prepare(
       'SELECT streak_count FROM attendance WHERE user_id = ? AND check_date = ?'
     ).bind(userId, yesterdayStr).first<{ streak_count: number }>();
 
     const streakCount = yesterdayAttendance ? yesterdayAttendance.streak_count + 1 : 1;
 
-    // 출석체크 등록
-    await c.env.DB.prepare(
-      'INSERT INTO attendance (user_id, check_date, streak_count) VALUES (?, ?, ?)'
-    ).bind(userId, today, streakCount).run();
-
-    // 통계 업데이트
     const stats = await c.env.DB.prepare(
       'SELECT * FROM attendance_stats WHERE user_id = ?'
     ).bind(userId).first<any>();
 
+    const statements: D1PreparedStatement[] = [
+      c.env.DB.prepare(
+        'INSERT INTO attendance (user_id, check_date, streak_count) VALUES (?, ?, ?)'
+      ).bind(userId, today, streakCount),
+    ];
+
     if (stats) {
-      const newMaxStreak = Math.max(stats.max_streak, streakCount);
-      await c.env.DB.prepare(`
-        UPDATE attendance_stats
-        SET total_checks = total_checks + 1,
-            current_streak = ?,
-            max_streak = ?,
-            last_check_date = ?
-        WHERE user_id = ?
-      `).bind(streakCount, newMaxStreak, today, userId).run();
+      statements.push(
+        c.env.DB.prepare(`
+          UPDATE attendance_stats
+          SET total_checks = total_checks + 1, current_streak = ?, max_streak = ?, last_check_date = ?
+          WHERE user_id = ?
+        `).bind(streakCount, Math.max(stats.max_streak, streakCount), today, userId)
+      );
     } else {
-      await c.env.DB.prepare(`
-        INSERT INTO attendance_stats (user_id, total_checks, current_streak, max_streak, last_check_date)
-        VALUES (?, 1, ?, ?, ?)
-      `).bind(userId, streakCount, streakCount, today).run();
+      statements.push(
+        c.env.DB.prepare(`
+          INSERT INTO attendance_stats (user_id, total_checks, current_streak, max_streak, last_check_date)
+          VALUES (?, 1, ?, ?, ?)
+        `).bind(userId, streakCount, streakCount, today)
+      );
     }
 
-    return success(c, {
-      message: '출석체크 완료!',
-      streak: streakCount,
-    });
+    await c.env.DB.batch(statements);
+
+    return success(c, { message: '출석체크 완료!', streak: streakCount });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
@@ -159,28 +91,21 @@ attendanceRoutes.post('/check', authMiddleware, async (c) => {
 attendanceRoutes.get('/stats', authMiddleware, async (c) => {
   try {
     const { userId } = c.get('user');
+    const today = getTodayKST();
 
     const stats = await c.env.DB.prepare(
       'SELECT * FROM attendance_stats WHERE user_id = ?'
     ).bind(userId).first();
 
-    const today = getTodayKST();
-
     if (!stats) {
       return success(c, {
-        total_checks: 0,
-        current_streak: 0,
-        max_streak: 0,
-        last_check_date: null,
-        server_today: today,
-        checked_today: false,
+        total_checks: 0, current_streak: 0, max_streak: 0,
+        last_check_date: null, server_today: today, checked_today: false,
       });
     }
 
     return success(c, {
-      ...stats,
-      server_today: today,
-      checked_today: stats.last_check_date === today,
+      ...stats, server_today: today, checked_today: stats.last_check_date === today,
     });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
@@ -198,7 +123,7 @@ attendanceRoutes.get('/ranking', async (c) => {
       LIMIT 10
     `).all<any>();
 
-    const rankingWithUser = ranking.results.map((r, i) => ({
+    return success(c, ranking.results.map((r: any, i: number) => ({
       rank: i + 1,
       character_name: r.character_name,
       profile_image: r.profile_image,
@@ -207,15 +132,13 @@ attendanceRoutes.get('/ranking', async (c) => {
       total_checks: r.total_checks,
       current_streak: r.current_streak,
       max_streak: r.max_streak,
-    }));
-
-    return success(c, rankingWithUser);
+    })));
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
 });
 
-// 이번 달 혜택 조회 (공개)
+// 이번 달 혜택 조회
 attendanceRoutes.get('/benefits', async (c) => {
   try {
     const yearParam = c.req.query('year');
@@ -225,18 +148,12 @@ attendanceRoutes.get('/benefits', async (c) => {
     const year = yearParam ? parseInt(yearParam) : kstNow.year;
     const month = monthParam ? parseInt(monthParam) : kstNow.month;
 
-    const benefits = await c.env.DB.prepare(`
-      SELECT * FROM attendance_benefits WHERE year = ? AND month = ?
-    `).bind(year, month).first();
+    const benefits = await c.env.DB.prepare(
+      'SELECT * FROM attendance_benefits WHERE year = ? AND month = ?'
+    ).bind(year, month).first();
 
     return success(c, benefits || {
-      year,
-      month,
-      reward_5: '',
-      reward_10: '',
-      reward_15: '',
-      reward_20: '',
-      reward_full: '',
+      year, month, reward_5: '', reward_10: '', reward_15: '', reward_20: '', reward_full: '',
     });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
@@ -253,23 +170,14 @@ attendanceRoutes.post('/benefits', authMiddleware, requireRole('master', 'submas
       return error(c, 'VALIDATION_ERROR', '년도와 월을 입력해주세요.');
     }
 
-    // 기존 혜택 확인
-    const existing = await c.env.DB.prepare(
-      'SELECT id FROM attendance_benefits WHERE year = ? AND month = ?'
-    ).bind(year, month).first();
-
-    if (existing) {
-      await c.env.DB.prepare(`
-        UPDATE attendance_benefits
-        SET reward_5 = ?, reward_10 = ?, reward_15 = ?, reward_20 = ?, reward_full = ?, updated_at = datetime('now')
-        WHERE year = ? AND month = ?
-      `).bind(reward_5 || '', reward_10 || '', reward_15 || '', reward_20 || '', reward_full || '', year, month).run();
-    } else {
-      await c.env.DB.prepare(`
-        INSERT INTO attendance_benefits (year, month, reward_5, reward_10, reward_15, reward_20, reward_full)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).bind(year, month, reward_5 || '', reward_10 || '', reward_15 || '', reward_20 || '', reward_full || '').run();
-    }
+    await c.env.DB.prepare(`
+      INSERT INTO attendance_benefits (year, month, reward_5, reward_10, reward_15, reward_20, reward_full)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(year, month) DO UPDATE SET
+        reward_5 = excluded.reward_5, reward_10 = excluded.reward_10,
+        reward_15 = excluded.reward_15, reward_20 = excluded.reward_20,
+        reward_full = excluded.reward_full, updated_at = datetime('now')
+    `).bind(year, month, reward_5 || '', reward_10 || '', reward_15 || '', reward_20 || '', reward_full || '').run();
 
     return success(c, { message: '혜택이 저장되었습니다.' });
   } catch (e: any) {
@@ -277,7 +185,7 @@ attendanceRoutes.post('/benefits', authMiddleware, requireRole('master', 'submas
   }
 });
 
-// 관리자: 전체 유저 출석 현황
+// 관리자: 전체 유저 출석 현황 (N+1 쿼리 수정)
 attendanceRoutes.get('/admin/users', authMiddleware, requireRole('master', 'submaster'), async (c) => {
   try {
     const yearParam = c.req.query('year');
@@ -289,7 +197,7 @@ attendanceRoutes.get('/admin/users', authMiddleware, requireRole('master', 'subm
     const startDate = `${year}-${month}-01`;
     const endDate = `${year}-${month}-31`;
 
-    // 모든 승인된 유저와 그들의 출석 현황
+    // 1. 모든 승인된 유저와 통계
     const users = await c.env.DB.prepare(`
       SELECT
         u.id, u.character_name, u.profile_image, u.default_icon, u.profile_zoom,
@@ -304,18 +212,25 @@ attendanceRoutes.get('/admin/users', authMiddleware, requireRole('master', 'subm
       ORDER BY month_count DESC, u.character_name ASC
     `).bind(startDate, endDate).all<any>();
 
-    // 각 유저의 출석한 날짜 목록도 가져오기
-    const result = await Promise.all(users.results.map(async (user: any) => {
-      const dates = await c.env.DB.prepare(`
-        SELECT check_date FROM attendance
-        WHERE user_id = ? AND check_date >= ? AND check_date <= ?
-        ORDER BY check_date ASC
-      `).bind(user.id, startDate, endDate).all<any>();
+    // 2. 해당 월의 모든 출석 기록을 한 번에 조회
+    const allAttendance = await c.env.DB.prepare(`
+      SELECT user_id, check_date FROM attendance
+      WHERE check_date >= ? AND check_date <= ?
+      ORDER BY check_date ASC
+    `).bind(startDate, endDate).all<any>();
 
-      return {
-        ...user,
-        attendance_dates: dates.results.map((d: any) => d.check_date),
-      };
+    // 유저별 출석 날짜 맵 구성
+    const attendanceMap = new Map<number, string[]>();
+    for (const row of allAttendance.results) {
+      if (!attendanceMap.has(row.user_id)) {
+        attendanceMap.set(row.user_id, []);
+      }
+      attendanceMap.get(row.user_id)!.push(row.check_date);
+    }
+
+    const result = users.results.map((user: any) => ({
+      ...user,
+      attendance_dates: attendanceMap.get(user.id) || [],
     }));
 
     return success(c, result);

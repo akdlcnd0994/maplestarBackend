@@ -1,19 +1,8 @@
 import { Hono } from 'hono';
-import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth';
+import { Env } from '../index';
+import { authMiddleware } from '../middleware/auth';
 import { success, error } from '../utils/response';
-
-type Bindings = {
-  DB: D1Database;
-  JWT_SECRET: string;
-};
-
-type Variables = {
-  user: {
-    userId: number;
-    username: string;
-    role: string;
-  };
-};
+import { getTodayKST } from '../utils/date';
 
 interface IncubatorItem {
   id: number;
@@ -23,7 +12,7 @@ interface IncubatorItem {
   percent: number | null;
 }
 
-export const incubatorRoutes = new Hono<{ Bindings: Bindings; Variables: Variables }>();
+export const incubatorRoutes = new Hono<{ Bindings: Env }>();
 
 // 경쟁모드 부스트 설정 (고정 확률)
 // ID 9: 이노센트 -> 1%
@@ -76,20 +65,6 @@ async function getRandomItem(db: D1Database, competitionBoost: boolean = false):
     }
   }
   return items[items.length - 1];
-}
-
-// 오늘 날짜 문자열 (KST, 오전 5시 기준)
-// 오전 5시부터 다음날 오전 5시까지가 하루
-function getTodayKST(): string {
-  const now = new Date();
-  const kst = new Date(now.getTime() + (9 * 60 * 60 * 1000));
-
-  // 오전 5시 이전이면 전날로 처리
-  if (kst.getHours() < 5) {
-    kst.setDate(kst.getDate() - 1);
-  }
-
-  return kst.toISOString().split('T')[0];
 }
 
 // 아이템 목록 조회
