@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env } from '../index';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { success, error } from '../utils/response';
+import { earnActivityPoints } from '../services/points';
 
 export const chaosRoutes = new Hono<{ Bindings: Env }>();
 
@@ -74,7 +75,9 @@ chaosRoutes.post('/records', authMiddleware, async (c) => {
       total_stat, finalUpgradeCount, innocent_used || 0, chaos_success || 0, chaos_fail || 0
     ).run();
 
-    return success(c, { message: '기록이 저장되었습니다.' });
+    const pointResult = await earnActivityPoints(c.env.DB, user.userId, 'chaos', String(finalUpgradeCount));
+
+    return success(c, { message: '기록이 저장되었습니다.', pointEarned: pointResult.earned ? pointResult.points : 0 });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', '기록 저장에 실패했습니다.', 500);
   }

@@ -3,6 +3,7 @@ import { Env } from '../index';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { success, error, notFound } from '../utils/response';
 import { getTodayKST } from '../utils/date';
+import { earnActivityPoints } from '../services/points';
 
 export const eventRoutes = new Hono<{ Bindings: Env }>();
 
@@ -90,7 +91,9 @@ eventRoutes.post('/:id/join', authMiddleware, async (c) => {
       c.env.DB.prepare('UPDATE events SET current_participants = current_participants + 1 WHERE id = ?').bind(id),
     ]);
 
-    return success(c, { joined: true, message: '참가 신청이 완료되었습니다!' });
+    const pointResult = await earnActivityPoints(c.env.DB, userId, 'event_join', id);
+
+    return success(c, { joined: true, message: '참가 신청이 완료되었습니다!', pointEarned: pointResult.earned ? pointResult.points : 0 });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }

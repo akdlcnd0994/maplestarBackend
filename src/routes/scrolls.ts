@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env } from '../index';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { success, error } from '../utils/response';
+import { earnActivityPoints } from '../services/points';
 
 export const scrollRoutes = new Hono<{ Bindings: Env }>();
 
@@ -90,9 +91,12 @@ scrollRoutes.post('/records', authMiddleware, async (c) => {
       await c.env.DB.batch(statements);
     }
 
+    const pointResult = await earnActivityPoints(c.env.DB, user.userId, 'scroll', String(item_id || 1));
+
     return success(c, {
       isNewRecord,
       message: isNewRecord ? '새로운 최고 기록!' : '기존 기록이 더 좋습니다.',
+      pointEarned: pointResult.earned ? pointResult.points : 0,
     });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', '기록 저장에 실패했습니다.', 500);

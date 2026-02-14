@@ -3,6 +3,7 @@ import { Env } from '../index';
 import { authMiddleware } from '../middleware/auth';
 import { success, error } from '../utils/response';
 import { getTodayKST } from '../utils/date';
+import { earnActivityPoints } from '../services/points';
 
 interface IncubatorItem {
   id: number;
@@ -243,13 +244,16 @@ incubatorRoutes.post('/hatch', authMiddleware, async (c) => {
     // 배치 실행
     await c.env.DB.batch(statements);
 
+    const pointResult = await earnActivityPoints(c.env.DB, user.userId, 'incubator', today);
+
     return success(c, {
       hatchedCount: actualCount,
       lastItem,
-      allItems: results, // 모든 부화 결과
+      allItems: results,
       legendaryFound,
       inventory: inventoryCounts,
-      dailyTotal: currentHatches + actualCount
+      dailyTotal: currentHatches + actualCount,
+      pointEarned: pointResult.earned ? pointResult.points : 0,
     });
   } catch (e: any) {
     console.error('Error hatching:', e);

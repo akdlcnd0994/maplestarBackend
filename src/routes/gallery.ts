@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env } from '../index';
 import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth';
 import { success, error, notFound } from '../utils/response';
+import { earnActivityPoints } from '../services/points';
 
 export const galleryRoutes = new Hono<{ Bindings: Env }>();
 
@@ -115,7 +116,9 @@ galleryRoutes.post('/', authMiddleware, async (c) => {
        VALUES (?, ?, ?, ?, ?)`
     ).bind(userId, title, description || '', key, imageUrl).run();
 
-    return success(c, { id: result.meta.last_row_id, url: imageUrl });
+    const pointResult = await earnActivityPoints(c.env.DB, userId, 'gallery', String(result.meta.last_row_id));
+
+    return success(c, { id: result.meta.last_row_id, url: imageUrl, pointEarned: pointResult.earned ? pointResult.points : 0 });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
@@ -211,7 +214,8 @@ galleryRoutes.post('/:id/like', authMiddleware, async (c) => {
       await c.env.DB.prepare(
         'UPDATE gallery SET like_count = like_count + 1 WHERE id = ?'
       ).bind(id).run();
-      return success(c, { liked: true });
+      const pointResult = await earnActivityPoints(c.env.DB, userId, 'like', `gallery_${id}`);
+      return success(c, { liked: true, pointEarned: pointResult.earned ? pointResult.points : 0 });
     }
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);

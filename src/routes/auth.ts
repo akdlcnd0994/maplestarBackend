@@ -4,6 +4,7 @@ import { authMiddleware } from '../middleware/auth';
 import { success, error } from '../utils/response';
 import { hashPassword, verifyPassword } from '../utils/password';
 import { signJWT } from '../utils/jwt';
+import { getBalance } from '../services/points';
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
 
@@ -125,7 +126,9 @@ authRoutes.get('/me', authMiddleware, async (c) => {
       return error(c, 'NOT_FOUND', '사용자를 찾을 수 없습니다.', 404);
     }
 
-    return success(c, user);
+    const pointBalance = await getBalance(c.env.DB, userId);
+
+    return success(c, { ...user, point_balance: pointBalance });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }

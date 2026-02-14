@@ -3,6 +3,7 @@ import { Env } from '../index';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { success, error } from '../utils/response';
 import { getTodayKST, getYesterdayKST, getCurrentYearMonthKST } from '../utils/date';
+import { earnActivityPoints } from '../services/points';
 
 export const attendanceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -81,7 +82,10 @@ attendanceRoutes.post('/check', authMiddleware, async (c) => {
 
     await c.env.DB.batch(statements);
 
-    return success(c, { message: '출석체크 완료!', streak: streakCount });
+    // 포인트 지급
+    const pointResult = await earnActivityPoints(c.env.DB, userId, 'attendance', today);
+
+    return success(c, { message: '출석체크 완료!', streak: streakCount, pointEarned: pointResult.earned ? pointResult.points : 0 });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }

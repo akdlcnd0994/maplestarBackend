@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env } from '../index';
 import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth';
 import { success, error, notFound } from '../utils/response';
+import { earnActivityPoints } from '../services/points';
 
 export const postRoutes = new Hono<{ Bindings: Env }>();
 
@@ -141,7 +142,9 @@ postRoutes.post('/', authMiddleware, async (c) => {
       'INSERT INTO posts (category_id, user_id, title, content) VALUES (?, ?, ?, ?)'
     ).bind(cat.id, userId, title, content).run();
 
-    return success(c, { id: result.meta.last_row_id });
+    const pointResult = await earnActivityPoints(c.env.DB, userId, 'post', String(result.meta.last_row_id));
+
+    return success(c, { id: result.meta.last_row_id, pointEarned: pointResult.earned ? pointResult.points : 0 });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
@@ -230,7 +233,8 @@ postRoutes.post('/:id/like', authMiddleware, async (c) => {
       await c.env.DB.prepare(
         'UPDATE posts SET like_count = like_count + 1 WHERE id = ?'
       ).bind(id).run();
-      return success(c, { liked: true });
+      const pointResult = await earnActivityPoints(c.env.DB, userId, 'like', `post_${id}`);
+      return success(c, { liked: true, pointEarned: pointResult.earned ? pointResult.points : 0 });
     }
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
@@ -336,7 +340,9 @@ postRoutes.post('/:id/comments', authMiddleware, async (c) => {
       'UPDATE posts SET comment_count = comment_count + 1 WHERE id = ?'
     ).bind(postId).run();
 
-    return success(c, { id: result.meta.last_row_id });
+    const pointResult = await earnActivityPoints(c.env.DB, userId, 'comment', String(result.meta.last_row_id));
+
+    return success(c, { id: result.meta.last_row_id, pointEarned: pointResult.earned ? pointResult.points : 0 });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }

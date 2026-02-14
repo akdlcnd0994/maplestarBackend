@@ -13,6 +13,9 @@ import { scrollRoutes } from './routes/scrolls';
 import { chaosRoutes } from './routes/chaos';
 import { incubatorRoutes } from './routes/incubator';
 import { rankingRoutes, scrapeAllRankings } from './routes/ranking';
+import { pointRoutes } from './routes/points';
+import { shopRoutes } from './routes/shop';
+import { announcementRoutes } from './routes/announcements';
 
 export interface Env {
   DB: D1Database;
@@ -47,6 +50,9 @@ app.route('/api/scrolls', scrollRoutes);
 app.route('/api/chaos', chaosRoutes);
 app.route('/api/incubator', incubatorRoutes);
 app.route('/api/ranking', rankingRoutes);
+app.route('/api/points', pointRoutes);
+app.route('/api/shop', shopRoutes);
+app.route('/api/announcements', announcementRoutes);
 
 // 이미지 서빙 (R2)
 app.get('/api/images/*', async (c) => {

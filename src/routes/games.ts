@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { Env } from '../index';
 import { authMiddleware } from '../middleware/auth';
 import { success, error } from '../utils/response';
+import { earnActivityPoints } from '../services/points';
 
 export const gameRoutes = new Hono<{ Bindings: Env }>();
 
@@ -59,11 +60,14 @@ gameRoutes.post('/scores', authMiddleware, async (c) => {
     const rankResult = await c.env.DB.prepare(rankQuery)
       .bind(game_type, score).first<{ rank: number }>();
 
+    const pointResult = await earnActivityPoints(c.env.DB, userId, 'game', game_type);
+
     return success(c, {
       isNewRecord,
       score,
       rank: rankResult?.rank || 1,
-      character_name: user?.character_name
+      character_name: user?.character_name,
+      pointEarned: pointResult.earned ? pointResult.points : 0,
     });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
