@@ -18,7 +18,7 @@ memberRoutes.get('/', async (c) => {
     if (pending === 'true') {
       const pendingUsers = await c.env.DB.prepare(`
         SELECT u.id, u.character_name, u.job, u.level, u.discord, u.profile_image, u.default_icon, u.profile_zoom,
-               u.alliance_id, u.role, u.created_at, u.active_name_color, u.active_frame, u.active_title,
+               u.alliance_id, u.role, u.created_at, u.active_name_color, u.active_frame, u.active_title, u.active_title_rarity,
                a.name as alliance_name, a.emblem as alliance_emblem, a.is_main as is_main_guild
         FROM users u
         LEFT JOIN alliances a ON u.alliance_id = a.id
@@ -32,7 +32,7 @@ memberRoutes.get('/', async (c) => {
     let query = `
       SELECT
         u.id, u.character_name, u.job, u.level, u.profile_image, u.default_icon, u.profile_zoom, u.role,
-        u.active_name_color, u.active_frame, u.active_title,
+        u.active_name_color, u.active_frame, u.active_title, u.active_title_rarity,
         u.alliance_id, u.last_login_at, u.created_at,
         a.name as alliance_name, a.emblem as alliance_emblem, a.is_main as is_main_guild,
         CASE

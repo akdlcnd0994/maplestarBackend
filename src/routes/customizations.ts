@@ -96,10 +96,10 @@ customizationRoutes.put('/equip', authMiddleware, async (c) => {
 
     // 보유 확인
     const owned = await c.env.DB.prepare(
-      `SELECT uc.id, ci.type, ci.value FROM user_customizations uc
+      `SELECT uc.id, ci.type, ci.value, ci.rarity FROM user_customizations uc
        JOIN customization_items ci ON uc.item_id = ci.id
        WHERE uc.user_id = ? AND uc.item_id = ?`
-    ).bind(userId, itemId).first<{ id: number; type: string; value: string }>();
+    ).bind(userId, itemId).first<{ id: number; type: string; value: string; rarity: string }>();
 
     if (!owned) {
       return error(c, 'NOT_OWNED', '보유하지 않은 아이템입니다.');
@@ -129,9 +129,15 @@ customizationRoutes.put('/equip', authMiddleware, async (c) => {
       };
       const column = columnMap[owned.type];
       if (column) {
-        await c.env.DB.prepare(
-          `UPDATE users SET ${column} = ?, updated_at = datetime('now') WHERE id = ?`
-        ).bind(owned.value, userId).run();
+        if (owned.type === 'title') {
+          await c.env.DB.prepare(
+            `UPDATE users SET ${column} = ?, active_title_rarity = ?, updated_at = datetime('now') WHERE id = ?`
+          ).bind(owned.value, owned.rarity, userId).run();
+        } else {
+          await c.env.DB.prepare(
+            `UPDATE users SET ${column} = ?, updated_at = datetime('now') WHERE id = ?`
+          ).bind(owned.value, userId).run();
+        }
       }
     } else {
       // 해제
@@ -147,9 +153,15 @@ customizationRoutes.put('/equip', authMiddleware, async (c) => {
       };
       const column = columnMap[owned.type];
       if (column) {
-        await c.env.DB.prepare(
-          `UPDATE users SET ${column} = NULL, updated_at = datetime('now') WHERE id = ?`
-        ).bind(userId).run();
+        if (owned.type === 'title') {
+          await c.env.DB.prepare(
+            `UPDATE users SET ${column} = NULL, active_title_rarity = NULL, updated_at = datetime('now') WHERE id = ?`
+          ).bind(userId).run();
+        } else {
+          await c.env.DB.prepare(
+            `UPDATE users SET ${column} = NULL, updated_at = datetime('now') WHERE id = ?`
+          ).bind(userId).run();
+        }
       }
     }
 

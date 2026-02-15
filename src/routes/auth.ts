@@ -117,6 +117,10 @@ authRoutes.get('/me', authMiddleware, async (c) => {
       SELECT u.id, u.username, u.character_name, u.job, u.level, u.discord,
              u.profile_image, u.default_icon, u.profile_zoom, u.role, u.alliance_id, u.is_online, u.created_at,
              u.active_name_color, u.active_frame, u.active_title,
+             (SELECT ci.rarity FROM customization_items ci
+              JOIN user_customizations uc ON uc.item_id = ci.id
+              WHERE uc.user_id = u.id AND uc.is_equipped = 1 AND ci.type = 'title'
+              LIMIT 1) as active_title_rarity,
              a.name as alliance_name, a.emblem as alliance_emblem, a.is_main as is_main_guild
       FROM users u
       LEFT JOIN alliances a ON u.alliance_id = a.id

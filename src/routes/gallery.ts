@@ -15,7 +15,7 @@ galleryRoutes.get('/', optionalAuthMiddleware, async (c) => {
     const offset = (page - 1) * limit;
 
     const gallery = await c.env.DB.prepare(`
-      SELECT g.*, u.character_name, u.profile_image, u.default_icon, u.profile_zoom, u.active_name_color, u.active_frame, u.active_title
+      SELECT g.*, u.character_name, u.profile_image, u.default_icon, u.profile_zoom, u.active_name_color, u.active_frame, u.active_title, u.active_title_rarity
       FROM gallery g
       LEFT JOIN users u ON g.user_id = u.id
       WHERE g.is_deleted = 0
@@ -39,6 +39,7 @@ galleryRoutes.get('/', optionalAuthMiddleware, async (c) => {
         active_name_color: g.active_name_color,
         active_frame: g.active_frame,
         active_title: g.active_title,
+        active_title_rarity: g.active_title_rarity,
       },
     }));
 
@@ -59,7 +60,7 @@ galleryRoutes.get('/:id', async (c) => {
     const id = c.req.param('id');
 
     const item = await c.env.DB.prepare(`
-      SELECT g.*, u.character_name, u.profile_image, u.default_icon, u.profile_zoom, u.active_name_color, u.active_frame, u.active_title
+      SELECT g.*, u.character_name, u.profile_image, u.default_icon, u.profile_zoom, u.active_name_color, u.active_frame, u.active_title, u.active_title_rarity
       FROM gallery g
       LEFT JOIN users u ON g.user_id = u.id
       WHERE g.id = ? AND g.is_deleted = 0
@@ -84,6 +85,7 @@ galleryRoutes.get('/:id', async (c) => {
         active_name_color: item.active_name_color,
         active_frame: item.active_frame,
         active_title: item.active_title,
+        active_title_rarity: item.active_title_rarity,
       },
     });
   } catch (e: any) {

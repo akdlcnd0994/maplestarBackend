@@ -162,7 +162,7 @@ incubatorRoutes.post('/hatch', authMiddleware, async (c) => {
   const count = Math.min(Math.max(parseInt(body.count) || 1, 1), 5); // 1~5
   const competitionBoost = body.competitionBoost === true; // 경쟁모드 부스트
   const today = getTodayKST();
-  const DAILY_LIMIT = 3000;
+  const DAILY_LIMIT = 100;
 
   try {
     // 오늘 부화 횟수 확인

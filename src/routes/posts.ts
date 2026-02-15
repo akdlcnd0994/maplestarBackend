@@ -26,7 +26,7 @@ postRoutes.get('/', optionalAuthMiddleware, async (c) => {
 
     const posts = await c.env.DB.prepare(`
       SELECT p.*, u.character_name, u.job, u.profile_image, u.default_icon, u.profile_zoom, u.role as user_role,
-             u.active_name_color, u.active_frame, u.active_title,
+             u.active_name_color, u.active_frame, u.active_title, u.active_title_rarity,
              u.alliance_id, a.name as alliance_name, a.emblem as alliance_emblem, a.is_main as is_main_guild,
              (SELECT GROUP_CONCAT(image_url) FROM post_images WHERE post_id = p.id) as image_urls
       FROM posts p
@@ -60,6 +60,7 @@ postRoutes.get('/', optionalAuthMiddleware, async (c) => {
         active_name_color: p.active_name_color,
         active_frame: p.active_frame,
         active_title: p.active_title,
+        active_title_rarity: p.active_title_rarity,
       },
       images: p.image_urls ? p.image_urls.split(',').map((url: string) => ({ image_url: url })) : [],
     }));
@@ -82,7 +83,7 @@ postRoutes.get('/:id', optionalAuthMiddleware, async (c) => {
 
     const post = await c.env.DB.prepare(`
       SELECT p.*, u.character_name, u.job, u.profile_image, u.default_icon, u.profile_zoom, u.role as user_role,
-             u.active_name_color, u.active_frame, u.active_title,
+             u.active_name_color, u.active_frame, u.active_title, u.active_title_rarity,
              u.alliance_id, a.name as alliance_name, a.emblem as alliance_emblem, a.is_main as is_main_guild
       FROM posts p
       LEFT JOIN users u ON p.user_id = u.id
@@ -120,6 +121,7 @@ postRoutes.get('/:id', optionalAuthMiddleware, async (c) => {
         active_name_color: post.active_name_color,
         active_frame: post.active_frame,
         active_title: post.active_title,
+        active_title_rarity: post.active_title_rarity,
       },
       images: images.results,
     });
@@ -318,7 +320,7 @@ postRoutes.get('/:id/comments', async (c) => {
 
     const comments = await c.env.DB.prepare(`
       Select c.*, u.character_name, u.profile_image, u.default_icon, u.profile_zoom, u.role as user_role,
-             u.active_name_color, u.active_frame, u.active_title,
+             u.active_name_color, u.active_frame, u.active_title, u.active_title_rarity,
              a.name as alliance_name, a.emblem as alliance_emblem, a.is_main as is_main_guild
       FROM comments c
       LEFT JOIN users u ON c.user_id = u.id
@@ -341,6 +343,7 @@ postRoutes.get('/:id/comments', async (c) => {
         active_name_color: c.active_name_color,
         active_frame: c.active_frame,
         active_title: c.active_title,
+        active_title_rarity: c.active_title_rarity,
       },
     }));
 
