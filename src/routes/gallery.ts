@@ -3,6 +3,7 @@ import { Env } from '../index';
 import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth';
 import { success, error, notFound } from '../utils/response';
 import { earnActivityPoints, revokeActivityPoints, hasEarnedPointsFor } from '../services/points';
+import { createNotification } from './notifications';
 
 export const galleryRoutes = new Hono<{ Bindings: Env }>();
 
@@ -14,7 +15,7 @@ galleryRoutes.get('/', optionalAuthMiddleware, async (c) => {
     const offset = (page - 1) * limit;
 
     const gallery = await c.env.DB.prepare(`
-      SELECT g.*, u.character_name, u.profile_image, u.default_icon, u.profile_zoom
+      SELECT g.*, u.character_name, u.profile_image, u.default_icon, u.profile_zoom, u.active_name_color, u.active_frame, u.active_title
       FROM gallery g
       LEFT JOIN users u ON g.user_id = u.id
       WHERE g.is_deleted = 0
@@ -35,6 +36,9 @@ galleryRoutes.get('/', optionalAuthMiddleware, async (c) => {
         profile_image: g.profile_image,
         default_icon: g.default_icon,
         profile_zoom: g.profile_zoom,
+        active_name_color: g.active_name_color,
+        active_frame: g.active_frame,
+        active_title: g.active_title,
       },
     }));
 
@@ -55,7 +59,7 @@ galleryRoutes.get('/:id', async (c) => {
     const id = c.req.param('id');
 
     const item = await c.env.DB.prepare(`
-      SELECT g.*, u.character_name, u.profile_image, u.default_icon, u.profile_zoom
+      SELECT g.*, u.character_name, u.profile_image, u.default_icon, u.profile_zoom, u.active_name_color, u.active_frame, u.active_title
       FROM gallery g
       LEFT JOIN users u ON g.user_id = u.id
       WHERE g.id = ? AND g.is_deleted = 0
@@ -77,6 +81,9 @@ galleryRoutes.get('/:id', async (c) => {
         profile_image: item.profile_image,
         default_icon: item.default_icon,
         profile_zoom: item.profile_zoom,
+        active_name_color: item.active_name_color,
+        active_frame: item.active_frame,
+        active_title: item.active_title,
       },
     });
   } catch (e: any) {
@@ -220,7 +227,7 @@ galleryRoutes.post('/:id/like', authMiddleware, async (c) => {
         'UPDATE gallery SET like_count = like_count + 1 WHERE id = ?'
       ).bind(id).run();
       // 자기 갤러리 좋아요는 포인트 미지급 + 이미 받은 좋아요 포인트 중복 방지
-      const gallery = await c.env.DB.prepare('SELECT user_id FROM gallery WHERE id = ?').bind(id).first<{ user_id: number }>();
+      const gallery = await c.env.DB.prepare('SELECT user_id, title FROM gallery WHERE id = ?').bind(id).first<{ user_id: number; title: string }>();
       let pointEarned = 0;
       if (gallery && gallery.user_id !== userId) {
         const alreadyEarned = await hasEarnedPointsFor(c.env.DB, userId, 'like', `gallery_${id}`);
@@ -228,6 +235,9 @@ galleryRoutes.post('/:id/like', authMiddleware, async (c) => {
           const pointResult = await earnActivityPoints(c.env.DB, userId, 'like', `gallery_${id}`);
           pointEarned = pointResult.earned ? pointResult.points : 0;
         }
+        // 알림: 갤러리 좋아요
+        const actor = await c.env.DB.prepare('SELECT character_name FROM users WHERE id = ?').bind(userId).first<{ character_name: string }>();
+        await createNotification(c.env.DB, gallery.user_id, 'like_gallery', userId, actor?.character_name || '', 'gallery', Number(id), gallery.title || '', `${actor?.character_name}님이 사진에 좋아요를 눌렀습니다.`);
       }
       return success(c, { liked: true, pointEarned });
     }

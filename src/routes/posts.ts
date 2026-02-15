@@ -3,6 +3,7 @@ import { Env } from '../index';
 import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth';
 import { success, error, notFound } from '../utils/response';
 import { earnActivityPoints, revokeActivityPoints, hasEarnedPointsFor } from '../services/points';
+import { createNotification } from './notifications';
 
 export const postRoutes = new Hono<{ Bindings: Env }>();
 
@@ -25,6 +26,7 @@ postRoutes.get('/', optionalAuthMiddleware, async (c) => {
 
     const posts = await c.env.DB.prepare(`
       SELECT p.*, u.character_name, u.job, u.profile_image, u.default_icon, u.profile_zoom, u.role as user_role,
+             u.active_name_color, u.active_frame, u.active_title,
              u.alliance_id, a.name as alliance_name, a.emblem as alliance_emblem, a.is_main as is_main_guild,
              (SELECT GROUP_CONCAT(image_url) FROM post_images WHERE post_id = p.id) as image_urls
       FROM posts p
@@ -55,6 +57,9 @@ postRoutes.get('/', optionalAuthMiddleware, async (c) => {
         alliance_name: p.alliance_name,
         alliance_emblem: p.alliance_emblem,
         is_main_guild: p.is_main_guild,
+        active_name_color: p.active_name_color,
+        active_frame: p.active_frame,
+        active_title: p.active_title,
       },
       images: p.image_urls ? p.image_urls.split(',').map((url: string) => ({ image_url: url })) : [],
     }));
@@ -77,6 +82,7 @@ postRoutes.get('/:id', optionalAuthMiddleware, async (c) => {
 
     const post = await c.env.DB.prepare(`
       SELECT p.*, u.character_name, u.job, u.profile_image, u.default_icon, u.profile_zoom, u.role as user_role,
+             u.active_name_color, u.active_frame, u.active_title,
              u.alliance_id, a.name as alliance_name, a.emblem as alliance_emblem, a.is_main as is_main_guild
       FROM posts p
       LEFT JOIN users u ON p.user_id = u.id
@@ -111,6 +117,9 @@ postRoutes.get('/:id', optionalAuthMiddleware, async (c) => {
         alliance_name: post.alliance_name,
         alliance_emblem: post.alliance_emblem,
         is_main_guild: post.is_main_guild,
+        active_name_color: post.active_name_color,
+        active_frame: post.active_frame,
+        active_title: post.active_title,
       },
       images: images.results,
     });
@@ -239,7 +248,7 @@ postRoutes.post('/:id/like', authMiddleware, async (c) => {
         'UPDATE posts SET like_count = like_count + 1 WHERE id = ?'
       ).bind(id).run();
       // 자기 게시글 좋아요는 포인트 미지급 + 이미 받은 좋아요 포인트 중복 방지
-      const post = await c.env.DB.prepare('SELECT user_id FROM posts WHERE id = ?').bind(id).first<{ user_id: number }>();
+      const post = await c.env.DB.prepare('SELECT user_id, title FROM posts WHERE id = ?').bind(id).first<{ user_id: number; title: string }>();
       let pointEarned = 0;
       if (post && post.user_id !== userId) {
         const alreadyEarned = await hasEarnedPointsFor(c.env.DB, userId, 'like', `post_${id}`);
@@ -247,6 +256,9 @@ postRoutes.post('/:id/like', authMiddleware, async (c) => {
           const pointResult = await earnActivityPoints(c.env.DB, userId, 'like', `post_${id}`);
           pointEarned = pointResult.earned ? pointResult.points : 0;
         }
+        // 알림: 게시글 좋아요
+        const actor = await c.env.DB.prepare('SELECT character_name FROM users WHERE id = ?').bind(userId).first<{ character_name: string }>();
+        await createNotification(c.env.DB, post.user_id, 'like_post', userId, actor?.character_name || '', 'post', Number(id), post.title || '', `${actor?.character_name}님이 게시글에 좋아요를 눌렀습니다.`);
       }
       return success(c, { liked: true, pointEarned });
     }
@@ -305,7 +317,8 @@ postRoutes.get('/:id/comments', async (c) => {
     const id = c.req.param('id');
 
     const comments = await c.env.DB.prepare(`
-      SELECT c.*, u.character_name, u.profile_image, u.default_icon, u.profile_zoom, u.role as user_role,
+      Select c.*, u.character_name, u.profile_image, u.default_icon, u.profile_zoom, u.role as user_role,
+             u.active_name_color, u.active_frame, u.active_title,
              a.name as alliance_name, a.emblem as alliance_emblem, a.is_main as is_main_guild
       FROM comments c
       LEFT JOIN users u ON c.user_id = u.id
@@ -325,6 +338,9 @@ postRoutes.get('/:id/comments', async (c) => {
         alliance_name: c.alliance_name,
         alliance_emblem: c.alliance_emblem,
         is_main_guild: c.is_main_guild,
+        active_name_color: c.active_name_color,
+        active_frame: c.active_frame,
+        active_title: c.active_title,
       },
     }));
 
@@ -355,6 +371,13 @@ postRoutes.post('/:id/comments', authMiddleware, async (c) => {
     ).bind(postId).run();
 
     const pointResult = await earnActivityPoints(c.env.DB, userId, 'comment', String(result.meta.last_row_id));
+
+    // 알림: 댓글
+    const post = await c.env.DB.prepare('SELECT user_id, title FROM posts WHERE id = ?').bind(postId).first<{ user_id: number; title: string }>();
+    const actor = await c.env.DB.prepare('SELECT character_name FROM users WHERE id = ?').bind(userId).first<{ character_name: string }>();
+    if (post) {
+      await createNotification(c.env.DB, post.user_id, 'comment', userId, actor?.character_name || '', 'post', Number(postId), post.title || '', `${actor?.character_name}님이 댓글을 남겼습니다.`);
+    }
 
     return success(c, { id: result.meta.last_row_id, pointEarned: pointResult.earned ? pointResult.points : 0 });
   } catch (e: any) {

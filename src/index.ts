@@ -16,6 +16,9 @@ import { rankingRoutes, scrapeAllRankings } from './routes/ranking';
 import { pointRoutes } from './routes/points';
 import { shopRoutes } from './routes/shop';
 import { announcementRoutes } from './routes/announcements';
+import { rouletteRoutes } from './routes/roulette';
+import { notificationRoutes } from './routes/notifications';
+import { customizationRoutes } from './routes/customizations';
 
 export interface Env {
   DB: D1Database;
@@ -53,6 +56,9 @@ app.route('/api/ranking', rankingRoutes);
 app.route('/api/points', pointRoutes);
 app.route('/api/shop', shopRoutes);
 app.route('/api/announcements', announcementRoutes);
+app.route('/api/roulette', rouletteRoutes);
+app.route('/api/notifications', notificationRoutes);
+app.route('/api/customizations', customizationRoutes);
 
 // 이미지 서빙 (R2)
 app.get('/api/images/*', async (c) => {
