@@ -16,7 +16,7 @@ interface PointTransaction {
   description: string;
 }
 
-// HMAC-SHA256 체크섬 생성 (무결성 검증)
+// SHA-256 체크섬 생성 (무결성 검증)
 async function generateChecksum(data: string): Promise<string> {
   const encoder = new TextEncoder();
   const msgBuffer = encoder.encode(data);
@@ -29,91 +29,107 @@ async function generateChecksum(data: string): Promise<string> {
  * - point_transactions: 주 원장
  * - point_transaction_log: 백업 원장 (체크섬 포함)
  * - point_balances: 잔액 캐시
+ *
+ * 레이스 컨디션 방지:
+ * - 지출 시 UPDATE ... WHERE balance >= ? 사용 (원자적 잔액 검증)
+ * - 백업 원장도 동일 배치에 포함
  */
 export async function processPointTransaction(
   db: D1Database,
   txn: PointTransaction
 ): Promise<{ success: boolean; newBalance: number; transactionId: number }> {
-  // 현재 잔액 조회 (없으면 0)
-  const balanceRow = await db.prepare(
-    'SELECT balance FROM point_balances WHERE user_id = ?'
-  ).bind(txn.userId).first<{ balance: number }>();
-
-  const currentBalance = balanceRow?.balance ?? 0;
-
-  // 지출 시 잔액 검증
-  if ((txn.type === 'spend' || txn.type === 'admin_deduct') && currentBalance < Math.abs(txn.amount)) {
-    return { success: false, newBalance: currentBalance, transactionId: 0 };
-  }
-
   // 금액 계산 (earn/admin_grant/refund는 양수, spend/admin_deduct는 음수)
-  const signedAmount = (txn.type === 'spend' || txn.type === 'admin_deduct')
-    ? -Math.abs(txn.amount)
-    : Math.abs(txn.amount);
-
-  const newBalance = currentBalance + signedAmount;
-
-  // 잔액이 음수가 되면 안됨
-  if (newBalance < 0) {
-    return { success: false, newBalance: currentBalance, transactionId: 0 };
-  }
+  const isDebit = txn.type === 'spend' || txn.type === 'admin_deduct';
+  const signedAmount = isDebit ? -Math.abs(txn.amount) : Math.abs(txn.amount);
+  const absAmount = Math.abs(txn.amount);
 
   const { date, time } = getKSTTimestamp();
   const createdAt = `${date} ${time}`;
 
-  // 체크섬 생성 (거래 무결성 보장)
-  const checksumData = `${txn.userId}:${txn.type}:${signedAmount}:${currentBalance}:${newBalance}:${txn.source}:${createdAt}`;
-  const checksum = await generateChecksum(checksumData);
+  if (isDebit) {
+    // === 지출: 원자적 잔액 검증 (TOCTOU 방지) ===
+    // balance >= absAmount 조건부 UPDATE로 레이스 컨디션 차단
+    const updateResult = await db.prepare(
+      `UPDATE point_balances SET
+        balance = balance - ?,
+        total_spent = total_spent + ?,
+        updated_at = ?
+      WHERE user_id = ? AND balance >= ?`
+    ).bind(absAmount, absAmount, createdAt, txn.userId, absAmount).run();
 
-  // 원자적 배치 실행 (3개 테이블 동시 업데이트)
-  const statements: D1PreparedStatement[] = [];
+    if (!updateResult.meta?.changes || updateResult.meta.changes === 0) {
+      // 잔액 부족 또는 레코드 없음
+      const balRow = await db.prepare(
+        'SELECT balance FROM point_balances WHERE user_id = ?'
+      ).bind(txn.userId).first<{ balance: number }>();
+      return { success: false, newBalance: balRow?.balance ?? 0, transactionId: 0 };
+    }
 
-  // 1. 주 원장 기록
-  statements.push(
-    db.prepare(
-      `INSERT INTO point_transactions (user_id, type, amount, balance_after, source, source_id, description, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(txn.userId, txn.type, signedAmount, newBalance, txn.source, txn.sourceId || null, txn.description, createdAt)
-  );
+    // 새 잔액 조회
+    const newBalRow = await db.prepare(
+      'SELECT balance FROM point_balances WHERE user_id = ?'
+    ).bind(txn.userId).first<{ balance: number }>();
+    const newBalance = newBalRow?.balance ?? 0;
+    const balanceBefore = newBalance + absAmount;
 
-  // 2. 잔액 업데이트 (UPSERT)
-  if (txn.type === 'spend' || txn.type === 'admin_deduct') {
-    statements.push(
+    // 체크섬 생성
+    const checksumData = `${txn.userId}:${txn.type}:${signedAmount}:${balanceBefore}:${newBalance}:${txn.source}:${createdAt}`;
+    const checksum = await generateChecksum(checksumData);
+
+    // 주 원장 + 백업 원장 동시 기록
+    const results = await db.batch([
       db.prepare(
-        `INSERT INTO point_balances (user_id, balance, total_earned, total_spent, updated_at)
-         VALUES (?, ?, 0, ?, ?)
-         ON CONFLICT(user_id) DO UPDATE SET
-           balance = ?,
-           total_spent = total_spent + ?,
-           updated_at = ?`
-      ).bind(txn.userId, newBalance, Math.abs(signedAmount), createdAt, newBalance, Math.abs(signedAmount), createdAt)
-    );
+        `INSERT INTO point_transactions (user_id, type, amount, balance_after, source, source_id, description, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(txn.userId, txn.type, signedAmount, newBalance, txn.source, txn.sourceId || null, txn.description, createdAt),
+      db.prepare(
+        `INSERT INTO point_transaction_log (transaction_id, user_id, type, amount, balance_before, balance_after, checksum, created_at)
+         VALUES (last_insert_rowid(), ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(txn.userId, txn.type, signedAmount, balanceBefore, newBalance, checksum, createdAt),
+    ]);
+
+    const txnResult = results[0] as D1Result;
+    const transactionId = txnResult.meta?.last_row_id ?? 0;
+
+    return { success: true, newBalance, transactionId };
   } else {
-    statements.push(
+    // === 수입: UPSERT + 주 원장 + 백업 원장 일괄 배치 ===
+    // 먼저 현재 잔액 확인 (체크섬용)
+    const balRow = await db.prepare(
+      'SELECT balance FROM point_balances WHERE user_id = ?'
+    ).bind(txn.userId).first<{ balance: number }>();
+    const currentBalance = balRow?.balance ?? 0;
+    const newBalance = currentBalance + absAmount;
+
+    // 체크섬 생성
+    const checksumData = `${txn.userId}:${txn.type}:${signedAmount}:${currentBalance}:${newBalance}:${txn.source}:${createdAt}`;
+    const checksum = await generateChecksum(checksumData);
+
+    // 원자적 배치: 잔액 UPSERT + 주 원장 + 백업 원장
+    const results = await db.batch([
       db.prepare(
         `INSERT INTO point_balances (user_id, balance, total_earned, total_spent, updated_at)
          VALUES (?, ?, ?, 0, ?)
          ON CONFLICT(user_id) DO UPDATE SET
-           balance = ?,
+           balance = balance + ?,
            total_earned = total_earned + ?,
            updated_at = ?`
-      ).bind(txn.userId, newBalance, Math.abs(signedAmount), createdAt, newBalance, Math.abs(signedAmount), createdAt)
-    );
+      ).bind(txn.userId, absAmount, absAmount, createdAt, absAmount, absAmount, createdAt),
+      db.prepare(
+        `INSERT INTO point_transactions (user_id, type, amount, balance_after, source, source_id, description, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(txn.userId, txn.type, signedAmount, newBalance, txn.source, txn.sourceId || null, txn.description, createdAt),
+      db.prepare(
+        `INSERT INTO point_transaction_log (transaction_id, user_id, type, amount, balance_before, balance_after, checksum, created_at)
+         VALUES (last_insert_rowid(), ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(txn.userId, txn.type, signedAmount, currentBalance, newBalance, checksum, createdAt),
+    ]);
+
+    const txnResult = results[1] as D1Result;
+    const transactionId = txnResult.meta?.last_row_id ?? 0;
+
+    return { success: true, newBalance, transactionId };
   }
-
-  const results = await db.batch(statements);
-
-  // 트랜잭션 ID 가져오기 (주 원장에서)
-  const txnResult = results[0] as D1Result;
-  const transactionId = txnResult.meta?.last_row_id ?? 0;
-
-  // 3. 백업 원장 기록 (체크섬 포함, 별도 실행)
-  await db.prepare(
-    `INSERT INTO point_transaction_log (transaction_id, user_id, type, amount, balance_before, balance_after, checksum, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(transactionId, txn.userId, txn.type, signedAmount, currentBalance, newBalance, checksum, createdAt).run();
-
-  return { success: true, newBalance, transactionId };
 }
 
 /**

@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
 import { Env } from '../index';
-import { authMiddleware, optionalAuthMiddleware, requireRole } from '../middleware/auth';
+import { authMiddleware, requireRole } from '../middleware/auth';
 import { success, error, notFound } from '../utils/response';
 import { logAdminAction } from '../services/points';
+import { getKSTTimestamp } from '../utils/date';
 
 const announcements = new Hono<{ Bindings: Env }>();
 
@@ -11,7 +12,8 @@ const announcements = new Hono<{ Bindings: Env }>();
 // 안 읽은 공지 팝업 목록 (로그인 사용자)
 announcements.get('/unread', authMiddleware, async (c) => {
   const user = c.get('user');
-  const now = new Date().toISOString().replace('T', ' ').split('.')[0];
+  const { date, time } = getKSTTimestamp();
+  const now = `${date} ${time}`;
 
   const unread = await c.env.DB.prepare(
     `SELECT a.id, a.title, a.content, a.type, a.priority, a.created_at
@@ -43,7 +45,8 @@ announcements.post('/:id/read', authMiddleware, async (c) => {
 
 // 전체 공지 목록 (공개)
 announcements.get('/', async (c) => {
-  const now = new Date().toISOString().replace('T', ' ').split('.')[0];
+  const { date, time } = getKSTTimestamp();
+  const now = `${date} ${time}`;
   const items = await c.env.DB.prepare(
     `SELECT id, title, content, type, priority, created_at
      FROM announcements
@@ -130,7 +133,10 @@ announcements.delete('/admin/:id', authMiddleware, requireRole('master', 'submas
   const admin = c.get('user');
   const id = parseInt(c.req.param('id'));
 
-  await c.env.DB.prepare('DELETE FROM announcements WHERE id = ?').bind(id).run();
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM announcement_reads WHERE announcement_id = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM announcements WHERE id = ?').bind(id),
+  ]);
 
   await logAdminAction(c.env.DB, admin.userId, 'delete_announcement', 'announcement', String(id), {});
 

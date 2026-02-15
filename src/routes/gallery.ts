@@ -214,8 +214,14 @@ galleryRoutes.post('/:id/like', authMiddleware, async (c) => {
       await c.env.DB.prepare(
         'UPDATE gallery SET like_count = like_count + 1 WHERE id = ?'
       ).bind(id).run();
-      const pointResult = await earnActivityPoints(c.env.DB, userId, 'like', `gallery_${id}`);
-      return success(c, { liked: true, pointEarned: pointResult.earned ? pointResult.points : 0 });
+      // 자기 갤러리 좋아요는 포인트 미지급
+      const gallery = await c.env.DB.prepare('SELECT user_id FROM gallery WHERE id = ?').bind(id).first<{ user_id: number }>();
+      let pointEarned = 0;
+      if (gallery && gallery.user_id !== userId) {
+        const pointResult = await earnActivityPoints(c.env.DB, userId, 'like', `gallery_${id}`);
+        pointEarned = pointResult.earned ? pointResult.points : 0;
+      }
+      return success(c, { liked: true, pointEarned });
     }
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);

@@ -45,7 +45,7 @@ shop.post('/purchase', authMiddleware, async (c) => {
 
   if (!item) return notFound(c, '상품을 찾을 수 없습니다.');
 
-  // 재고 확인
+  // 재고 사전 확인
   if (item.stock < quantity) {
     return error(c, 'OUT_OF_STOCK', '재고가 부족합니다.');
   }
@@ -62,7 +62,7 @@ shop.post('/purchase', authMiddleware, async (c) => {
 
   const totalPrice = item.price * quantity;
 
-  // 포인트 차감 (원자적)
+  // 포인트 차감 (원자적 잔액 검증)
   const txnResult = await processPointTransaction(c.env.DB, {
     userId: user.userId,
     type: 'spend',
@@ -76,16 +76,30 @@ shop.post('/purchase', authMiddleware, async (c) => {
     return error(c, 'INSUFFICIENT_BALANCE', '포인트가 부족합니다.');
   }
 
-  // 주문 기록 및 재고 차감 (배치)
-  await c.env.DB.batch([
-    c.env.DB.prepare(
-      `INSERT INTO shop_orders (user_id, item_id, quantity, total_price, status, created_at)
-       VALUES (?, ?, ?, ?, 'completed', datetime('now'))`
-    ).bind(user.userId, item_id, quantity, totalPrice),
-    c.env.DB.prepare(
-      'UPDATE shop_items SET stock = stock - ?, updated_at = datetime(\'now\') WHERE id = ?'
-    ).bind(quantity, item_id),
-  ]);
+  // 원자적 재고 차감 (stock >= quantity 조건부 UPDATE로 레이스 컨디션 방지)
+  const stockUpdate = await c.env.DB.prepare(
+    `UPDATE shop_items SET stock = stock - ?, updated_at = datetime('now')
+     WHERE id = ? AND stock >= ?`
+  ).bind(quantity, item_id, quantity).run();
+
+  if (!stockUpdate.meta?.changes || stockUpdate.meta.changes === 0) {
+    // 재고 부족 (동시 구매로 인한 경합) - 포인트 환불
+    await processPointTransaction(c.env.DB, {
+      userId: user.userId,
+      type: 'refund',
+      amount: totalPrice,
+      source: 'shop',
+      sourceId: String(item_id),
+      description: `교환소 재고 부족 환불: ${item.name}`,
+    });
+    return error(c, 'OUT_OF_STOCK', '재고가 부족합니다. 포인트가 환불되었습니다.');
+  }
+
+  // 주문 기록
+  await c.env.DB.prepare(
+    `INSERT INTO shop_orders (user_id, item_id, quantity, total_price, status, created_at)
+     VALUES (?, ?, ?, ?, 'completed', datetime('now'))`
+  ).bind(user.userId, item_id, quantity, totalPrice).run();
 
   return success(c, {
     message: `${item.name} x${quantity} 교환 완료!`,
@@ -231,6 +245,9 @@ shop.put('/admin/items/:id', authMiddleware, requireRole('master'), async (c) =>
     sortOrder = body.sort_order ?? null;
     isActive = body.is_active ?? null;
   }
+
+  const existing = await c.env.DB.prepare('SELECT id FROM shop_items WHERE id = ?').bind(id).first();
+  if (!existing) return notFound(c, '상품을 찾을 수 없습니다.');
 
   await c.env.DB.prepare(
     `UPDATE shop_items SET

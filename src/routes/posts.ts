@@ -233,8 +233,14 @@ postRoutes.post('/:id/like', authMiddleware, async (c) => {
       await c.env.DB.prepare(
         'UPDATE posts SET like_count = like_count + 1 WHERE id = ?'
       ).bind(id).run();
-      const pointResult = await earnActivityPoints(c.env.DB, userId, 'like', `post_${id}`);
-      return success(c, { liked: true, pointEarned: pointResult.earned ? pointResult.points : 0 });
+      // 자기 게시글 좋아요는 포인트 미지급
+      const post = await c.env.DB.prepare('SELECT user_id FROM posts WHERE id = ?').bind(id).first<{ user_id: number }>();
+      let pointEarned = 0;
+      if (post && post.user_id !== userId) {
+        const pointResult = await earnActivityPoints(c.env.DB, userId, 'like', `post_${id}`);
+        pointEarned = pointResult.earned ? pointResult.points : 0;
+      }
+      return success(c, { liked: true, pointEarned });
     }
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
