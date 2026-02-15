@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { Env } from '../index';
 import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth';
 import { success, error, notFound } from '../utils/response';
-import { earnActivityPoints } from '../services/points';
+import { earnActivityPoints, revokeActivityPoints, hasEarnedPointsFor } from '../services/points';
 
 export const galleryRoutes = new Hono<{ Bindings: Env }>();
 
@@ -183,6 +183,11 @@ galleryRoutes.delete('/:id', authMiddleware, async (c) => {
       'UPDATE gallery SET is_deleted = 1, updated_at = datetime("now") WHERE id = ?'
     ).bind(id).run();
 
+    // 갤러리 업로드 포인트 회수 (본인 삭제 시)
+    if (item.user_id === userId) {
+      await revokeActivityPoints(c.env.DB, userId, 'gallery', String(id));
+    }
+
     return success(c, { message: '삭제되었습니다.' });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
@@ -214,12 +219,15 @@ galleryRoutes.post('/:id/like', authMiddleware, async (c) => {
       await c.env.DB.prepare(
         'UPDATE gallery SET like_count = like_count + 1 WHERE id = ?'
       ).bind(id).run();
-      // 자기 갤러리 좋아요는 포인트 미지급
+      // 자기 갤러리 좋아요는 포인트 미지급 + 이미 받은 좋아요 포인트 중복 방지
       const gallery = await c.env.DB.prepare('SELECT user_id FROM gallery WHERE id = ?').bind(id).first<{ user_id: number }>();
       let pointEarned = 0;
       if (gallery && gallery.user_id !== userId) {
-        const pointResult = await earnActivityPoints(c.env.DB, userId, 'like', `gallery_${id}`);
-        pointEarned = pointResult.earned ? pointResult.points : 0;
+        const alreadyEarned = await hasEarnedPointsFor(c.env.DB, userId, 'like', `gallery_${id}`);
+        if (!alreadyEarned) {
+          const pointResult = await earnActivityPoints(c.env.DB, userId, 'like', `gallery_${id}`);
+          pointEarned = pointResult.earned ? pointResult.points : 0;
+        }
       }
       return success(c, { liked: true, pointEarned });
     }

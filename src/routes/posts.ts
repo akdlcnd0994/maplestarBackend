@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { Env } from '../index';
 import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth';
 import { success, error, notFound } from '../utils/response';
-import { earnActivityPoints } from '../services/points';
+import { earnActivityPoints, revokeActivityPoints, hasEarnedPointsFor } from '../services/points';
 
 export const postRoutes = new Hono<{ Bindings: Env }>();
 
@@ -202,6 +202,11 @@ postRoutes.delete('/:id', authMiddleware, async (c) => {
       'UPDATE posts SET is_deleted = 1, updated_at = datetime("now") WHERE id = ?'
     ).bind(id).run();
 
+    // 게시글 작성 포인트 회수 (본인 삭제 시)
+    if (post.user_id === userId) {
+      await revokeActivityPoints(c.env.DB, userId, 'post', String(id));
+    }
+
     return success(c, { message: '삭제되었습니다.' });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
@@ -233,12 +238,15 @@ postRoutes.post('/:id/like', authMiddleware, async (c) => {
       await c.env.DB.prepare(
         'UPDATE posts SET like_count = like_count + 1 WHERE id = ?'
       ).bind(id).run();
-      // 자기 게시글 좋아요는 포인트 미지급
+      // 자기 게시글 좋아요는 포인트 미지급 + 이미 받은 좋아요 포인트 중복 방지
       const post = await c.env.DB.prepare('SELECT user_id FROM posts WHERE id = ?').bind(id).first<{ user_id: number }>();
       let pointEarned = 0;
       if (post && post.user_id !== userId) {
-        const pointResult = await earnActivityPoints(c.env.DB, userId, 'like', `post_${id}`);
-        pointEarned = pointResult.earned ? pointResult.points : 0;
+        const alreadyEarned = await hasEarnedPointsFor(c.env.DB, userId, 'like', `post_${id}`);
+        if (!alreadyEarned) {
+          const pointResult = await earnActivityPoints(c.env.DB, userId, 'like', `post_${id}`);
+          pointEarned = pointResult.earned ? pointResult.points : 0;
+        }
       }
       return success(c, { liked: true, pointEarned });
     }
@@ -380,6 +388,11 @@ postRoutes.delete('/:id/comments/:commentId', authMiddleware, async (c) => {
     await c.env.DB.prepare(
       'UPDATE posts SET comment_count = comment_count - 1 WHERE id = ?'
     ).bind(postId).run();
+
+    // 댓글 작성 포인트 회수 (본인 삭제 시)
+    if (comment.user_id === userId) {
+      await revokeActivityPoints(c.env.DB, userId, 'comment', String(commentId));
+    }
 
     return success(c, { message: '삭제되었습니다.' });
   } catch (e: any) {

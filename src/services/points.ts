@@ -210,6 +210,77 @@ export async function earnActivityPoints(
 }
 
 /**
+ * 특정 활동에 대해 이미 포인트를 받았는지 확인
+ * 좋아요 중복 포인트 방지에 사용
+ */
+export async function hasEarnedPointsFor(
+  db: D1Database,
+  userId: number,
+  source: string,
+  sourceId: string
+): Promise<boolean> {
+  const row = await db.prepare(
+    `SELECT id FROM point_transactions
+     WHERE user_id = ? AND source = ? AND source_id = ? AND type = 'earn'
+     LIMIT 1`
+  ).bind(userId, source, sourceId).first();
+  return !!row;
+}
+
+/**
+ * 활동 포인트 회수 (삭제 시 사용)
+ * 해당 활동으로 지급된 포인트를 찾아서 차감
+ */
+export async function revokeActivityPoints(
+  db: D1Database,
+  userId: number,
+  source: string,
+  sourceId: string
+): Promise<{ revoked: boolean; points: number }> {
+  // 해당 활동으로 지급된 포인트 조회
+  const earned = await db.prepare(
+    `SELECT amount FROM point_transactions
+     WHERE user_id = ? AND source = ? AND source_id = ? AND type = 'earn'
+     LIMIT 1`
+  ).bind(userId, source, sourceId).first<{ amount: number }>();
+
+  if (!earned || earned.amount <= 0) {
+    return { revoked: false, points: 0 };
+  }
+
+  const pointsToRevoke = earned.amount;
+
+  // 포인트 차감 처리
+  const result = await processPointTransaction(db, {
+    userId,
+    type: 'admin_deduct',
+    amount: pointsToRevoke,
+    source,
+    sourceId: `revoke_${sourceId}`,
+    description: `${source} 삭제로 인한 포인트 회수`,
+  });
+
+  if (!result.success) {
+    // 잔액 부족 시 가능한 만큼 차감
+    const balance = await getBalance(db, userId);
+    if (balance > 0) {
+      await processPointTransaction(db, {
+        userId,
+        type: 'admin_deduct',
+        amount: balance,
+        source,
+        sourceId: `revoke_${sourceId}`,
+        description: `${source} 삭제로 인한 포인트 회수 (부분)`,
+      });
+      return { revoked: true, points: balance };
+    }
+    return { revoked: false, points: 0 };
+  }
+
+  return { revoked: true, points: pointsToRevoke };
+}
+
+/**
  * 어드민 감사 로그 기록
  */
 export async function logAdminAction(
