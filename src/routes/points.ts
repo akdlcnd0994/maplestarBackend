@@ -101,7 +101,7 @@ points.get('/ranking', async (c) => {
      FROM point_balances pb
      JOIN users u ON u.id = pb.user_id
      WHERE u.is_approved = 1
-     ORDER BY pb.total_earned DESC
+     ORDER BY pb.balance DESC
      LIMIT ?`
   ).bind(limit).all();
 
