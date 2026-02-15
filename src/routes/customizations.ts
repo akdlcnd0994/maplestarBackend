@@ -24,7 +24,7 @@ customizationRoutes.get('/my', authMiddleware, async (c) => {
     const { userId } = c.get('user');
     const items = await c.env.DB.prepare(
       `SELECT uc.id, uc.item_id, uc.is_equipped, uc.purchased_at,
-              ci.type, ci.name, ci.description, ci.value, ci.rarity, ci.icon, ci.preview
+              ci.type, ci.name, ci.description, ci.value, ci.rarity, ci.preview
        FROM user_customizations uc
        JOIN customization_items ci ON uc.item_id = ci.id
        WHERE uc.user_id = ?
