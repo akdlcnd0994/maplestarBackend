@@ -116,27 +116,46 @@ attendanceRoutes.get('/stats', authMiddleware, async (c) => {
   }
 });
 
-// 출석 랭킹
+// 출석 랭킹 (월별)
 attendanceRoutes.get('/ranking', async (c) => {
   try {
-    const ranking = await c.env.DB.prepare(`
-      SELECT s.*, u.character_name, u.profile_image, u.default_icon, u.profile_zoom
-      FROM attendance_stats s
-      LEFT JOIN users u ON s.user_id = u.id
-      ORDER BY s.total_checks DESC
-      LIMIT 10
-    `).all<any>();
+    const yearParam = c.req.query('year');
+    const monthParam = c.req.query('month');
 
-    return success(c, ranking.results.map((r: any, i: number) => ({
-      rank: i + 1,
-      character_name: r.character_name,
-      profile_image: r.profile_image,
-      default_icon: r.default_icon,
-      profile_zoom: r.profile_zoom,
-      total_checks: r.total_checks,
-      current_streak: r.current_streak,
-      max_streak: r.max_streak,
-    })));
+    const kstNow = getCurrentYearMonthKST();
+    const year = yearParam ? parseInt(yearParam) : kstNow.year;
+    const month = monthParam ? String(parseInt(monthParam)).padStart(2, '0') : String(kstNow.month).padStart(2, '0');
+    const startDate = `${year}-${month}-01`;
+    const endDate = `${year}-${month}-31`;
+
+    const ranking = await c.env.DB.prepare(`
+      SELECT
+        a.user_id,
+        COUNT(*) as month_checks,
+        u.character_name, u.profile_image, u.default_icon, u.profile_zoom,
+        COALESCE(s.current_streak, 0) as current_streak
+      FROM attendance a
+      LEFT JOIN users u ON a.user_id = u.id
+      LEFT JOIN attendance_stats s ON a.user_id = s.user_id
+      WHERE a.check_date >= ? AND a.check_date <= ?
+      GROUP BY a.user_id
+      ORDER BY month_checks DESC, MAX(a.check_date) DESC
+      LIMIT 10
+    `).bind(startDate, endDate).all<any>();
+
+    return success(c, {
+      year: parseInt(String(year)),
+      month: parseInt(month),
+      ranking: ranking.results.map((r: any, i: number) => ({
+        rank: i + 1,
+        character_name: r.character_name,
+        profile_image: r.profile_image,
+        default_icon: r.default_icon,
+        profile_zoom: r.profile_zoom,
+        month_checks: r.month_checks,
+        current_streak: r.current_streak,
+      })),
+    });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
