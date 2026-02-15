@@ -33,7 +33,7 @@ postRoutes.get('/', optionalAuthMiddleware, async (c) => {
       LEFT JOIN users u ON p.user_id = u.id
       LEFT JOIN alliances a ON u.alliance_id = a.id
       WHERE p.category_id = ? AND p.is_deleted = 0
-      ORDER BY p.is_notice DESC, p.created_at DESC
+      ORDER BY p.is_notice DESC, p.is_recommended DESC, p.created_at DESC
       LIMIT ? OFFSET ?
     `).bind(cat.id, limit, offset).all<any>();
 
@@ -249,15 +249,40 @@ postRoutes.post('/:id/like', authMiddleware, async (c) => {
       await c.env.DB.prepare(
         'UPDATE posts SET like_count = like_count + 1 WHERE id = ?'
       ).bind(id).run();
-      // 자기 게시글 좋아요는 포인트 미지급 + 이미 받은 좋아요 포인트 중복 방지
-      const post = await c.env.DB.prepare('SELECT user_id, title FROM posts WHERE id = ?').bind(id).first<{ user_id: number; title: string }>();
+
+      const post = await c.env.DB.prepare(
+        `SELECT p.user_id, p.title, p.like_count, p.is_recommended, p.category_id,
+                bc.slug as category_slug
+         FROM posts p
+         LEFT JOIN board_categories bc ON p.category_id = bc.id
+         WHERE p.id = ?`
+      ).bind(id).first<{ user_id: number; title: string; like_count: number; is_recommended: number; category_slug: string }>();
+
       let pointEarned = 0;
       if (post && post.user_id !== userId) {
+        // 일반 좋아요 포인트 (중복 방지)
         const alreadyEarned = await hasEarnedPointsFor(c.env.DB, userId, 'like', `post_${id}`);
         if (!alreadyEarned) {
           const pointResult = await earnActivityPoints(c.env.DB, userId, 'like', `post_${id}`);
           pointEarned = pointResult.earned ? pointResult.points : 0;
         }
+
+        // 첫 좋아요 보너스 (게시글의 첫 좋아요인 경우)
+        if (post.like_count <= 1) {
+          const bonusResult = await earnActivityPoints(c.env.DB, userId, 'first_like', `post_${id}`);
+          if (bonusResult.earned) pointEarned += bonusResult.points;
+        }
+
+        // 추천게시물 승격 (정보게시판 + 좋아요 10개 이상 + 아직 미추천)
+        if (post.category_slug === 'info' && post.like_count >= 10 && !post.is_recommended) {
+          await c.env.DB.prepare('UPDATE posts SET is_recommended = 1 WHERE id = ?').bind(id).run();
+          // 글 작성자에게 추천게시물 보너스 포인트
+          const alreadyRecommended = await hasEarnedPointsFor(c.env.DB, post.user_id, 'recommended_post', `post_${id}`);
+          if (!alreadyRecommended) {
+            await earnActivityPoints(c.env.DB, post.user_id, 'recommended_post', `post_${id}`);
+          }
+        }
+
         // 알림: 게시글 좋아요
         const actor = await c.env.DB.prepare('SELECT character_name FROM users WHERE id = ?').bind(userId).first<{ character_name: string }>();
         await createNotification(c.env.DB, post.user_id, 'like_post', userId, actor?.character_name || '', 'post', Number(id), post.title || '', `${actor?.character_name}님이 게시글에 좋아요를 눌렀습니다.`);
@@ -373,16 +398,29 @@ postRoutes.post('/:id/comments', authMiddleware, async (c) => {
       'UPDATE posts SET comment_count = comment_count + 1 WHERE id = ?'
     ).bind(postId).run();
 
-    const pointResult = await earnActivityPoints(c.env.DB, userId, 'comment', String(result.meta.last_row_id));
+    // 본인 글에 댓글 시 포인트 미지급
+    const post = await c.env.DB.prepare('SELECT user_id, title, comment_count FROM posts WHERE id = ?').bind(postId).first<{ user_id: number; title: string; comment_count: number }>();
+    let pointEarned = 0;
+
+    if (post && post.user_id !== userId) {
+      // 일반 댓글 포인트
+      const pointResult = await earnActivityPoints(c.env.DB, userId, 'comment', String(result.meta.last_row_id));
+      pointEarned = pointResult.earned ? pointResult.points : 0;
+
+      // 첫 댓글 보너스 (해당 게시글의 첫 댓글인 경우)
+      if (post.comment_count <= 1) {
+        const bonusResult = await earnActivityPoints(c.env.DB, userId, 'first_comment', `post_${postId}`);
+        if (bonusResult.earned) pointEarned += bonusResult.points;
+      }
+    }
 
     // 알림: 댓글
-    const post = await c.env.DB.prepare('SELECT user_id, title FROM posts WHERE id = ?').bind(postId).first<{ user_id: number; title: string }>();
     const actor = await c.env.DB.prepare('SELECT character_name FROM users WHERE id = ?').bind(userId).first<{ character_name: string }>();
-    if (post) {
+    if (post && post.user_id !== userId) {
       await createNotification(c.env.DB, post.user_id, 'comment', userId, actor?.character_name || '', 'post', Number(postId), post.title || '', `${actor?.character_name}님이 댓글을 남겼습니다.`);
     }
 
-    return success(c, { id: result.meta.last_row_id, pointEarned: pointResult.earned ? pointResult.points : 0 });
+    return success(c, { id: result.meta.last_row_id, pointEarned });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }

@@ -176,6 +176,9 @@ export async function earnActivityPoints(
     incubator: '부화기',
     event_join: '일정 참여',
     like: '좋아요',
+    first_comment: '첫 댓글 보너스',
+    first_like: '첫 좋아요 보너스',
+    recommended_post: '추천게시물 보너스',
   };
 
   // 포인트 지급

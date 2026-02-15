@@ -133,6 +133,7 @@ attendanceRoutes.get('/ranking', async (c) => {
         a.user_id,
         COUNT(*) as month_checks,
         u.character_name, u.profile_image, u.default_icon, u.profile_zoom,
+        u.active_name_color, u.active_frame, u.active_title, u.active_title_rarity,
         COALESCE(s.current_streak, 0) as current_streak
       FROM attendance a
       LEFT JOIN users u ON a.user_id = u.id
@@ -152,6 +153,10 @@ attendanceRoutes.get('/ranking', async (c) => {
         profile_image: r.profile_image,
         default_icon: r.default_icon,
         profile_zoom: r.profile_zoom,
+        active_name_color: r.active_name_color,
+        active_frame: r.active_frame,
+        active_title: r.active_title,
+        active_title_rarity: r.active_title_rarity,
         month_checks: r.month_checks,
         current_streak: r.current_streak,
       })),

@@ -96,7 +96,8 @@ points.get('/ranking', async (c) => {
 
   const ranking = await c.env.DB.prepare(
     `SELECT pb.user_id, pb.balance, pb.total_earned, pb.total_spent,
-            u.character_name, u.profile_image, u.default_icon, u.job, u.level
+            u.character_name, u.profile_image, u.default_icon, u.profile_zoom, u.job, u.level,
+            u.active_name_color, u.active_frame, u.active_title, u.active_title_rarity
      FROM point_balances pb
      JOIN users u ON u.id = pb.user_id
      WHERE u.is_approved = 1
