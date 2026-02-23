@@ -10,6 +10,9 @@ interface JWTPayload {
 const encoder = new TextEncoder();
 
 async function createHmacKey(secret: string): Promise<CryptoKey> {
+  if (!secret) {
+    throw new Error('JWT_SECRET is not configured');
+  }
   return crypto.subtle.importKey(
     'raw',
     encoder.encode(secret),

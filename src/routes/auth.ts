@@ -12,7 +12,8 @@ export const authRoutes = new Hono<{ Bindings: Env }>();
 authRoutes.post('/signup', async (c) => {
   try {
     const body = await c.req.json();
-    const { username, password, character_name, job, level, discord, alliance_id } = body;
+    const { username, password, job, level, discord, alliance_id } = body;
+    const character_name = (body.character_name || '').trim();
 
     if (!username || !password || !character_name) {
       return error(c, 'VALIDATION_ERROR', '필수 항목을 입력해주세요.');
@@ -336,7 +337,7 @@ authRoutes.get('/my-events', authMiddleware, async (c) => {
 authRoutes.post('/register', async (c) => {
   try {
     const formData = await c.req.formData();
-    const characterName = formData.get('character_name') as string;
+    const characterName = ((formData.get('character_name') as string) || '').trim();
     const job = formData.get('job') as string;
     const level = formData.get('level') as string;
     const discord = formData.get('discord') as string;

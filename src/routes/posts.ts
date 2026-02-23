@@ -161,6 +161,33 @@ postRoutes.post('/', authMiddleware, async (c) => {
   }
 });
 
+// 인라인 이미지 즉시 업로드 (WYSIWYG 에디터용)
+postRoutes.post('/upload-image', authMiddleware, async (c) => {
+  try {
+    if (!c.env.BUCKET) {
+      return error(c, 'NOT_CONFIGURED', '이미지 저장소가 설정되지 않았습니다.', 503);
+    }
+    const { userId } = c.get('user');
+    const formData = await c.req.formData();
+    const file = formData.get('file') as File;
+
+    if (!file) {
+      return error(c, 'VALIDATION_ERROR', '파일이 없습니다.');
+    }
+
+    const ext = file.name.split('.').pop()?.toLowerCase() || 'png';
+    const key = `posts/inline/${userId}/${crypto.randomUUID()}.${ext}`;
+
+    await c.env.BUCKET.put(key, await file.arrayBuffer(), {
+      httpMetadata: { contentType: file.type },
+    });
+
+    return success(c, { url: `/api/images/${key}` });
+  } catch (e: any) {
+    return error(c, 'SERVER_ERROR', e.message, 500);
+  }
+});
+
 // 게시글 수정
 postRoutes.put('/:id', authMiddleware, async (c) => {
   try {

@@ -65,97 +65,105 @@ memberRoutes.get('/', async (c) => {
 
     const members = await c.env.DB.prepare(query).bind(...params).all();
 
+    // IN 절 배치 헬퍼 (D1 변수 제한 대응)
+    async function batchInQuery<T>(db: D1Database, sql: string, params: any[], batchSize = 50): Promise<T[]> {
+      const results: T[] = [];
+      for (let i = 0; i < params.length; i += batchSize) {
+        const chunk = params.slice(i, i + batchSize);
+        const placeholders = chunk.map(() => '?').join(',');
+        const query = sql.replace('__PH__', placeholders);
+        const res = await db.prepare(query).bind(...chunk).all();
+        results.push(...(res.results as T[]));
+      }
+      return results;
+    }
+
     // 랭킹 데이터로 멤버 정보 보강 (본캐/부캐 연결)
     const memberList = members.results as any[];
     if (memberList.length > 0) {
       const names = memberList.map((m: any) => m.character_name);
-      const placeholders = names.map(() => '?').join(',');
 
       // 멤버 닉네임과 매칭되는 랭킹 캐릭터 조회
-      const rankingData = await c.env.DB.prepare(
-        `SELECT username, userlevel, userjob, userrank, userguild, usercode FROM ranking_characters WHERE username IN (${placeholders})`
-      )
-        .bind(...names)
-        .all();
+      const rankingResults = await batchInQuery<any>(c.env.DB,
+        `SELECT rc.username, rc.userlevel, rc.userjob, rc.userrank, rc.userguild, rc.usercode, rc.avatar_img
+         FROM ranking_characters rc
+         INNER JOIN (SELECT username, MAX(userindex) as max_idx FROM ranking_characters WHERE username IN (__PH__) GROUP BY username) latest
+         ON rc.username = latest.username AND rc.userindex = latest.max_idx`,
+        names
+      );
 
       const rankingMap = new Map<string, any>();
-      const usercodes = new Set<string>();
-      for (const r of rankingData.results as any[]) {
+      for (const r of rankingResults) {
         rankingMap.set(r.username, r);
-        usercodes.add(r.usercode);
       }
 
       // 코드 히스토리 기반 부캐릭터 조회 (영구 연결)
-      // 1. 멤버 이름으로 히스토리에서 모든 usercode 조회
-      const memberNames = memberList.map((m: any) => m.character_name);
-      const memberNamePlaceholders = memberNames.map(() => '?').join(',');
-      const memberCodeHistory = await c.env.DB.prepare(
-        `SELECT username, usercode FROM character_code_history WHERE username IN (${memberNamePlaceholders})`
-      ).bind(...memberNames).all();
+      const memberCodeResults = await batchInQuery<any>(c.env.DB,
+        `SELECT username, usercode FROM character_code_history WHERE username IN (__PH__)`,
+        names
+      );
 
       // 멤버별 usercode 목록
       const memberCodesMap = new Map<string, Set<string>>();
-      for (const row of memberCodeHistory.results as any[]) {
+      for (const row of memberCodeResults) {
         if (!memberCodesMap.has(row.username)) {
           memberCodesMap.set(row.username, new Set());
         }
         memberCodesMap.get(row.username)!.add(row.usercode);
       }
 
-      // 2. 모든 관련 usercode로 연결된 캐릭터 조회
+      // 모든 관련 usercode로 연결된 캐릭터 조회
       const allCodes = new Set<string>();
       for (const codes of memberCodesMap.values()) {
         for (const code of codes) allCodes.add(code);
       }
-      // ranking_characters의 현재 usercode도 포함
-      for (const r of rankingData.results as any[]) {
+      for (const r of rankingResults) {
         allCodes.add(r.usercode);
       }
 
-      let altMap = new Map<string, any[]>(); // usercode → characters
+      let altMap = new Map<string, any[]>();
       if (allCodes.size > 0) {
         const codeArr = [...allCodes];
-        const codePlaceholders = codeArr.map(() => '?').join(',');
 
-        // 히스토리에서 해당 코드를 가진 모든 캐릭터명 조회
-        const linkedNames = await c.env.DB.prepare(
-          `SELECT DISTINCT username, usercode FROM character_code_history WHERE usercode IN (${codePlaceholders})`
-        ).bind(...codeArr).all();
+        const linkedNames = await batchInQuery<any>(c.env.DB,
+          `SELECT DISTINCT username, usercode FROM character_code_history WHERE usercode IN (__PH__)`,
+          codeArr
+        );
 
-        // usercode별 연결된 캐릭터명 맵
         const codeToNames = new Map<string, Set<string>>();
-        for (const row of linkedNames.results as any[]) {
+        for (const row of linkedNames) {
           if (!codeToNames.has(row.usercode)) {
             codeToNames.set(row.usercode, new Set());
           }
           codeToNames.get(row.usercode)!.add(row.username);
         }
 
-        // 연결된 모든 캐릭터의 랭킹 데이터 조회
         const allLinkedNames = new Set<string>();
-        for (const names of codeToNames.values()) {
-          for (const name of names) allLinkedNames.add(name);
+        for (const nameSet of codeToNames.values()) {
+          for (const name of nameSet) allLinkedNames.add(name);
         }
 
         if (allLinkedNames.size > 0) {
           const nameArr = [...allLinkedNames];
-          const namePlaceholders = nameArr.map(() => '?').join(',');
-          const altData = await c.env.DB.prepare(
-            `SELECT username, userlevel, userjob, userrank, usercode FROM ranking_characters WHERE username IN (${namePlaceholders}) ORDER BY userlevel DESC`
-          ).bind(...nameArr).all();
+          const altResults = await batchInQuery<any>(c.env.DB,
+            `SELECT rc.username, rc.userlevel, rc.userjob, rc.userrank, rc.usercode, rc.avatar_img
+             FROM ranking_characters rc
+             INNER JOIN (SELECT username, MAX(userindex) as max_idx FROM ranking_characters WHERE username IN (__PH__) GROUP BY username) latest
+             ON rc.username = latest.username AND rc.userindex = latest.max_idx
+             ORDER BY rc.userlevel DESC`,
+            nameArr
+          );
 
-          for (const alt of altData.results as any[]) {
-            // 현재 usercode와 히스토리 usercode 모두로 매핑
+          for (const alt of altResults) {
             if (!altMap.has(alt.usercode)) {
               altMap.set(alt.usercode, []);
             }
             altMap.get(alt.usercode)!.push(alt);
           }
 
-          // 히스토리 코드로도 매핑 (코드 변경 시 연결 유지)
-          for (const [code, names] of codeToNames) {
-            for (const name of names) {
-              const charData = (altData.results as any[]).find((a: any) => a.username === name);
+          for (const [code, codeNames] of codeToNames) {
+            for (const name of codeNames) {
+              const charData = altResults.find((a: any) => a.username === name);
               if (charData && !altMap.get(code)?.some((a: any) => a.username === name)) {
                 if (!altMap.has(code)) altMap.set(code, []);
                 altMap.get(code)!.push(charData);
@@ -173,8 +181,8 @@ memberRoutes.get('/', async (c) => {
           member.ranking_job = ranking.userjob;
           member.ranking_rank = ranking.userrank;
           member.ranking_guild = ranking.userguild;
+          member.avatar_img = ranking.avatar_img;
 
-          // 히스토리 기반 부캐 조회: 해당 멤버의 모든 usercode로 연결된 캐릭터
           const memberCodes = memberCodesMap.get(member.character_name) || new Set([ranking.usercode]);
           const altSet = new Set<string>();
           const altList: any[] = [];
@@ -187,7 +195,6 @@ memberRoutes.get('/', async (c) => {
               }
             }
           }
-          // 현재 usercode로도 조회
           if (!memberCodes.has(ranking.usercode)) {
             const chars = altMap.get(ranking.usercode) || [];
             for (const ch of chars) {
@@ -203,6 +210,7 @@ memberRoutes.get('/', async (c) => {
           member.ranking_job = null;
           member.ranking_rank = null;
           member.ranking_guild = null;
+          member.avatar_img = null;
           member.alt_characters = [];
         }
       }
@@ -241,16 +249,17 @@ memberRoutes.get('/:id', async (c) => {
     // 랭킹 데이터로 본캐/부캐 정보 추가
     const memberData = member as any;
     const ranking = await c.env.DB.prepare(
-      'SELECT userlevel, userjob, userrank, userguild, usercode FROM ranking_characters WHERE username = ?'
+      'SELECT userlevel, userjob, userrank, userguild, usercode, avatar_img FROM ranking_characters WHERE username = ? ORDER BY userindex DESC LIMIT 1'
     )
       .bind(memberData.character_name)
-      .first<{ userlevel: number; userjob: string; userrank: number; userguild: string; usercode: string }>();
+      .first<{ userlevel: number; userjob: string; userrank: number; userguild: string; usercode: string; avatar_img: string }>();
 
     if (ranking) {
       memberData.ranking_level = ranking.userlevel;
       memberData.ranking_job = ranking.userjob;
       memberData.ranking_rank = ranking.userrank;
       memberData.ranking_guild = ranking.userguild;
+      memberData.avatar_img = ranking.avatar_img;
 
       // 히스토리 기반 부캐 조회 (영구 연결)
       const codeHistory = await c.env.DB.prepare(
@@ -270,7 +279,11 @@ memberRoutes.get('/:id', async (c) => {
       if (allNames.length > 0) {
         const namePlaceholders = allNames.map(() => '?').join(',');
         const alts = await c.env.DB.prepare(
-          `SELECT username, userlevel, userjob, userrank FROM ranking_characters WHERE username IN (${namePlaceholders}) ORDER BY userlevel DESC`
+          `SELECT rc.username, rc.userlevel, rc.userjob, rc.userrank, rc.avatar_img
+           FROM ranking_characters rc
+           INNER JOIN (SELECT username, MAX(userindex) as max_idx FROM ranking_characters WHERE username IN (${namePlaceholders}) GROUP BY username) latest
+           ON rc.username = latest.username AND rc.userindex = latest.max_idx
+           ORDER BY rc.userlevel DESC`
         ).bind(...allNames).all();
         memberData.alt_characters = alts.results;
       } else {
@@ -281,6 +294,7 @@ memberRoutes.get('/:id', async (c) => {
       memberData.ranking_job = null;
       memberData.ranking_rank = null;
       memberData.ranking_guild = null;
+      memberData.avatar_img = null;
       memberData.alt_characters = [];
     }
 

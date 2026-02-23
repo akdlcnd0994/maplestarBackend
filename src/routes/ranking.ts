@@ -29,21 +29,19 @@ interface RankingCharacter {
   userdate: string;
   usertime: string;
   usercode: string;
+  avatar_img: string;
 }
 
 /**
  * maplestar.io 랭킹 페이지 HTML을 파싱하여 캐릭터 정보를 추출
  */
-function parseRankingHtml(html: string): Array<{ rank: number; name: string; level: number; job: string; guild: string; code: string }> {
-  const results: Array<{ rank: number; name: string; level: number; job: string; guild: string; code: string }> = [];
+function parseRankingHtml(html: string): Array<{ rank: number; name: string; level: number; job: string; guild: string; code: string; avatarImg: string }> {
+  const results: Array<{ rank: number; name: string; level: number; job: string; guild: string; code: string; avatarImg: string }> = [];
 
   const liBlocks = html.split(/<li\s+class="flex items-center py-2/);
 
   for (let i = 1; i < liBlocks.length; i++) {
     const block = liBlocks[i];
-
-    const codeMatch = block.match(/%2Fprofile%2F\d+%2F(\d+\.png)/);
-    if (!codeMatch) continue;
 
     const flex2Matches = [...block.matchAll(/class="flex-2 text-center">([^<]+)<\/span>/g)];
     if (flex2Matches.length < 3) continue;
@@ -70,19 +68,24 @@ function parseRankingHtml(html: string): Array<{ rank: number; name: string; lev
       }
     }
 
-    results.push({ rank, name, level, job, guild, code: codeMatch[1] });
+    // 아바타 이미지는 없을 수 있음 (프로필 미설정 캐릭터)
+    const codeMatch = block.match(/%2Fprofile%2F(\d+)%2F(\d+\.png)/);
+    const code = codeMatch ? codeMatch[2] : '';
+    const avatarImg = codeMatch ? `https://mod-file.dn.nexoncdn.co.kr/profile/${codeMatch[1]}/${codeMatch[2]}` : '';
+    results.push({ rank, name, level, job, guild, code, avatarImg });
   }
 
   return results;
 }
 
 /**
- * 랭킹 스크래핑 (UPSERT 방식 - 기존 데이터 유지하면서 업데이트)
+ * 랭킹 스크래핑 (히스토리 누적 방식 - 매 스크래핑마다 새 레코드 삽입)
  * batchIndex: 0~10 (운영 배치 모드), undefined면 전체 스크래핑 (로컬/수동)
  */
 export async function scrapeAllRankings(db: D1Database, batchIndex?: number): Promise<{ total: number; errors: number; batch?: number }> {
-  const { date: userdate, time: usertime } = getKSTTimestamp();
-  const timestamp = `${userdate} ${usertime}`;
+  const { date: userdate, time: rawtime } = getKSTTimestamp();
+  const usertime = rawtime.slice(0, 2); // "HH" 형식 (예: "18")
+  const timestamp = `${userdate} ${rawtime}`;
 
   // batchIndex가 없으면 전체 스크래핑 (로컬/수동 실행용)
   const jobGroups = batchIndex !== undefined
@@ -124,6 +127,7 @@ export async function scrapeAllRankings(db: D1Database, batchIndex?: number): Pr
             userdate,
             usertime,
             usercode: char.code,
+            avatar_img: char.avatarImg,
           });
         }
       } catch (e) {
@@ -133,27 +137,24 @@ export async function scrapeAllRankings(db: D1Database, batchIndex?: number): Pr
     }
   }
 
-  // UPSERT: 기존 데이터 유지하면서 업데이트 (username UNIQUE 인덱스 필요)
+  // INSERT: 히스토리 누적 (UPSERT 대신 매번 새 레코드 삽입)
   for (let i = 0; i < allCharacters.length; i += BATCH_SIZE) {
     const batch = allCharacters.slice(i, i + BATCH_SIZE);
     const stmts = batch.map((char) =>
       db
         .prepare(
-          `INSERT INTO ranking_characters (userrank, username, userlevel, userjob, userguild, userdate, usertime, usercode)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(username) DO UPDATE SET
-             userrank=excluded.userrank, userlevel=excluded.userlevel, userjob=excluded.userjob,
-             userguild=excluded.userguild, userdate=excluded.userdate, usertime=excluded.usertime,
-             usercode=excluded.usercode`
+          `INSERT OR REPLACE INTO ranking_characters (userrank, username, userlevel, userjob, userguild, userdate, usertime, usercode, avatar_img)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .bind(char.userrank, char.username, char.userlevel, char.userjob, char.userguild, char.userdate, char.usertime, char.usercode)
+        .bind(char.userrank, char.username, char.userlevel, char.userjob, char.userguild, char.userdate, char.usertime, char.usercode, char.avatar_img)
     );
     await db.batch(stmts);
   }
 
-  // 코드 히스토리 기록 (본캐/부캐 영구 연결용)
-  for (let i = 0; i < allCharacters.length; i += BATCH_SIZE) {
-    const batch = allCharacters.slice(i, i + BATCH_SIZE);
+  // 코드 히스토리 기록 (본캐/부캐 영구 연결용, 아바타 없는 캐릭터 제외)
+  const charsWithCode = allCharacters.filter((c) => c.usercode);
+  for (let i = 0; i < charsWithCode.length; i += BATCH_SIZE) {
+    const batch = charsWithCode.slice(i, i + BATCH_SIZE);
     const stmts = batch.map((char) =>
       db
         .prepare(
@@ -171,7 +172,7 @@ export async function scrapeAllRankings(db: D1Database, batchIndex?: number): Pr
   return { total: allCharacters.length, errors: errorCount, batch: batchIndex };
 }
 
-// 랭킹 데이터 조회 API
+// 랭킹 데이터 조회 API (최신 스냅샷만)
 rankingRoutes.get('/', async (c) => {
   try {
     const username = c.req.query('username');
@@ -179,23 +180,26 @@ rankingRoutes.get('/', async (c) => {
     const job = c.req.query('job');
     const limit = parseInt(c.req.query('limit') || '100');
 
-    let query = 'SELECT * FROM ranking_characters WHERE 1=1';
+    let query = `SELECT rc.* FROM ranking_characters rc
+      INNER JOIN (SELECT username, MAX(userindex) as max_idx FROM ranking_characters GROUP BY username) latest
+      ON rc.username = latest.username AND rc.userindex = latest.max_idx
+      WHERE 1=1`;
     const params: any[] = [];
 
     if (username) {
-      query += ' AND username LIKE ?';
+      query += ' AND rc.username LIKE ?';
       params.push(`%${username}%`);
     }
     if (guild) {
-      query += ' AND userguild = ?';
+      query += ' AND rc.userguild = ?';
       params.push(guild);
     }
     if (job) {
-      query += ' AND userjob = ?';
+      query += ' AND rc.userjob = ?';
       params.push(job);
     }
 
-    query += ' ORDER BY userrank ASC LIMIT ?';
+    query += ' ORDER BY rc.userrank ASC LIMIT ?';
     params.push(limit);
 
     const result = await c.env.DB.prepare(query).bind(...params).all();
@@ -234,12 +238,94 @@ rankingRoutes.get('/alts/:username', async (c) => {
     // 연결된 모든 캐릭터의 최신 랭킹 데이터 조회
     const namePlaceholders = allNames.map(() => '?').join(',');
     const characters = await c.env.DB.prepare(
-      `SELECT username, userlevel, userjob, userrank, userguild, usercode FROM ranking_characters WHERE username IN (${namePlaceholders}) ORDER BY userlevel DESC`
+      `SELECT rc.username, rc.userlevel, rc.userjob, rc.userrank, rc.userguild, rc.usercode, rc.avatar_img
+       FROM ranking_characters rc
+       INNER JOIN (SELECT username, MAX(userindex) as max_idx FROM ranking_characters WHERE username IN (${namePlaceholders}) GROUP BY username) latest
+       ON rc.username = latest.username AND rc.userindex = latest.max_idx
+       ORDER BY rc.userlevel DESC`
     ).bind(...allNames).all();
 
     return success(c, {
       characters: characters.results,
     });
+  } catch (e: any) {
+    return error(c, 'SERVER_ERROR', e.message, 500);
+  }
+});
+
+// 특정 캐릭터 레벨 변화 이력 조회
+rankingRoutes.get('/history/:username', async (c) => {
+  try {
+    const username = c.req.param('username');
+    const days = parseInt(c.req.query('days') || '30');
+
+    // KST 기준 threshold 계산
+    const now = new Date();
+    now.setHours(now.getHours() + 9); // UTC → KST
+    now.setDate(now.getDate() - days);
+    const threshold = now.toISOString().slice(0, 10);
+
+    const result = await c.env.DB.prepare(
+      `SELECT userlevel, userjob, userrank, userguild, userdate, usertime, avatar_img
+       FROM ranking_characters
+       WHERE username = ? AND userdate >= ?
+       ORDER BY userdate ASC, usertime ASC`
+    ).bind(username, threshold).all();
+
+    return success(c, result.results);
+  } catch (e: any) {
+    return error(c, 'SERVER_ERROR', e.message, 500);
+  }
+});
+
+// 본캐+부캐 전체 히스토리 조회 (차트용)
+rankingRoutes.get('/history/:username/alts', async (c) => {
+  try {
+    const username = c.req.param('username');
+    const days = parseInt(c.req.query('days') || '30');
+
+    const now = new Date();
+    now.setHours(now.getHours() + 9);
+    now.setDate(now.getDate() - days);
+    const threshold = now.toISOString().slice(0, 10);
+
+    // 본캐/부캐 연결된 모든 캐릭터 이름 조회
+    const codeHistory = await c.env.DB.prepare(
+      'SELECT DISTINCT usercode FROM character_code_history WHERE username = ?'
+    ).bind(username).all();
+
+    const codes = (codeHistory.results as any[]).map((r: any) => r.usercode);
+    if (codes.length === 0) {
+      return success(c, { characters: {} });
+    }
+
+    const codePlaceholders = codes.map(() => '?').join(',');
+    const linkedNames = await c.env.DB.prepare(
+      `SELECT DISTINCT username FROM character_code_history WHERE usercode IN (${codePlaceholders})`
+    ).bind(...codes).all();
+
+    const allNames = (linkedNames.results as any[]).map((r: any) => r.username);
+    if (allNames.length === 0) {
+      return success(c, { characters: {} });
+    }
+
+    // 모든 연결 캐릭터의 히스토리 조회
+    const namePlaceholders = allNames.map(() => '?').join(',');
+    const history = await c.env.DB.prepare(
+      `SELECT username, userlevel, userjob, userrank, userguild, userdate, usertime, avatar_img
+       FROM ranking_characters
+       WHERE username IN (${namePlaceholders}) AND userdate >= ?
+       ORDER BY userdate ASC, usertime ASC`
+    ).bind(...allNames, threshold).all();
+
+    // 캐릭터별로 그룹화
+    const grouped: Record<string, any[]> = {};
+    for (const row of history.results as any[]) {
+      if (!grouped[row.username]) grouped[row.username] = [];
+      grouped[row.username].push(row);
+    }
+
+    return success(c, { characters: grouped });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
@@ -261,15 +347,17 @@ rankingRoutes.post('/scrape', authMiddleware, requireRole('master'), async (c) =
 // 스크래핑 상태 확인
 rankingRoutes.get('/status', async (c) => {
   try {
-    const count = await c.env.DB.prepare('SELECT COUNT(*) as total FROM ranking_characters').first<{ total: number }>();
-    const latest = await c.env.DB.prepare('SELECT userdate, usertime FROM ranking_characters ORDER BY userdate DESC, usertime DESC LIMIT 1').first<{
+    const totalRecords = await c.env.DB.prepare('SELECT COUNT(*) as total FROM ranking_characters').first<{ total: number }>();
+    const uniqueChars = await c.env.DB.prepare('SELECT COUNT(DISTINCT username) as total FROM ranking_characters').first<{ total: number }>();
+    const latest = await c.env.DB.prepare('SELECT userdate, usertime FROM ranking_characters ORDER BY userindex DESC LIMIT 1').first<{
       userdate: string;
       usertime: string;
     }>();
     const historyCount = await c.env.DB.prepare('SELECT COUNT(*) as total FROM character_code_history').first<{ total: number }>();
 
     return success(c, {
-      total_characters: count?.total || 0,
+      total_records: totalRecords?.total || 0,
+      unique_characters: uniqueChars?.total || 0,
       total_code_history: historyCount?.total || 0,
       last_scrape_date: latest?.userdate || null,
       last_scrape_time: latest?.usertime || null,
