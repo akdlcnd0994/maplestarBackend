@@ -150,7 +150,7 @@ postRoutes.post('/', authMiddleware, async (c) => {
     }
 
     const result = await c.env.DB.prepare(
-      'INSERT INTO posts (category_id, user_id, title, content) VALUES (?, ?, ?, ?)'
+      'INSERT INTO posts (category_id, user_id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, datetime(\'now\', \'+9 hours\'), datetime(\'now\', \'+9 hours\'))'
     ).bind(cat.id, userId, title, content).run();
 
     const pointResult = await earnActivityPoints(c.env.DB, userId, 'post', String(result.meta.last_row_id));
@@ -209,7 +209,7 @@ postRoutes.put('/:id', authMiddleware, async (c) => {
     }
 
     await c.env.DB.prepare(
-      'UPDATE posts SET title = ?, content = ?, updated_at = datetime("now") WHERE id = ?'
+      'UPDATE posts SET title = ?, content = ?, updated_at = datetime(\'now\', \'+9 hours\') WHERE id = ?'
     ).bind(title, content, id).run();
 
     return success(c, { message: '수정되었습니다.' });
@@ -237,7 +237,7 @@ postRoutes.delete('/:id', authMiddleware, async (c) => {
     }
 
     await c.env.DB.prepare(
-      'UPDATE posts SET is_deleted = 1, updated_at = datetime("now") WHERE id = ?'
+      'UPDATE posts SET is_deleted = 1, updated_at = datetime(\'now\', \'+9 hours\') WHERE id = ?'
     ).bind(id).run();
 
     // 게시글 작성 포인트 회수 (본인 삭제 시)

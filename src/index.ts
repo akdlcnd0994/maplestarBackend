@@ -25,6 +25,7 @@ export interface Env {
   BUCKET?: R2Bucket;
   JWT_SECRET: string;
   ENVIRONMENT: string;
+  LOCAL_DEV?: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -70,6 +71,20 @@ app.get('/api/images/*', async (c) => {
     const object = await c.env.BUCKET.get(key);
 
     if (!object) {
+      // 로컬 개발 환경(LOCAL_DEV=true)에서는 원격 R2에서 직접 가져옴
+      if (c.env.LOCAL_DEV) {
+        try {
+          const remoteRes = await fetch(`https://api.maplestar.app/api/images/${key}`);
+          if (remoteRes.ok) {
+            return new Response(remoteRes.body, {
+              headers: {
+                'Content-Type': remoteRes.headers.get('Content-Type') || 'image/png',
+                'Cache-Control': 'public, max-age=31536000',
+              },
+            });
+          }
+        } catch {}
+      }
       return c.json({ success: false, error: { code: 'NOT_FOUND', message: 'Image not found' } }, 404);
     }
 
