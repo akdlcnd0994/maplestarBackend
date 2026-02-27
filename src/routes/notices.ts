@@ -78,7 +78,7 @@ noticeRoutes.post('/', authMiddleware, requireRole('master', 'submaster'), async
 
     const result = await c.env.DB.prepare(`
       INSERT INTO notices (user_id, title, content, is_important, is_active, created_at)
-      VALUES (?, ?, ?, ?, 1, datetime('now'))
+      VALUES (?, ?, ?, ?, 1, datetime('now', '+9 hours'))
     `).bind(user.userId, title.trim(), content.trim(), is_important ? 1 : 0).run();
 
     return success(c, { id: result.meta.last_row_id });
@@ -99,7 +99,7 @@ noticeRoutes.put('/:id', authMiddleware, requireRole('master', 'submaster'), asy
     }
 
     await c.env.DB.prepare(`
-      UPDATE notices SET title = ?, content = ?, is_important = ?, updated_at = datetime('now')
+      UPDATE notices SET title = ?, content = ?, is_important = ?, updated_at = datetime('now', '+9 hours')
       WHERE id = ?
     `).bind(title.trim(), content.trim(), is_important ? 1 : 0, id).run();
 
