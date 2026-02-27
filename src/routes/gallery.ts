@@ -258,19 +258,20 @@ galleryRoutes.post('/:id/comments', authMiddleware, async (c) => {
       return error(c, 'VALIDATION_ERROR', '댓글 내용을 입력해주세요.');
     }
 
-    await c.env.DB.prepare(
+    const insertResult = await c.env.DB.prepare(
       'INSERT INTO gallery_comments (gallery_id, user_id, content) VALUES (?, ?, ?)'
     ).bind(galleryId, userId, content.trim()).run();
+    const commentId = insertResult.meta?.last_row_id;
 
     await c.env.DB.prepare(
       'UPDATE gallery SET comment_count = comment_count + 1 WHERE id = ?'
     ).bind(galleryId).run();
 
-    // 포인트 지급 (자기 갤러리 댓글 제외)
+    // 포인트 지급 (자기 갤러리 댓글 제외, 댓글별 중복 방지)
     const gallery = await c.env.DB.prepare('SELECT user_id, title FROM gallery WHERE id = ?').bind(galleryId).first<{ user_id: number; title: string }>();
     let pointEarned = 0;
     if (gallery && gallery.user_id !== userId) {
-      const pointResult = await earnActivityPoints(c.env.DB, userId, 'comment', `gallery_${galleryId}`);
+      const pointResult = await earnActivityPoints(c.env.DB, userId, 'comment', `gallery_comment_${commentId}`);
       pointEarned = pointResult.earned ? pointResult.points : 0;
 
       // 알림
@@ -310,6 +311,11 @@ galleryRoutes.delete('/:id/comments/:commentId', authMiddleware, async (c) => {
     await c.env.DB.prepare(
       'UPDATE gallery SET comment_count = MAX(comment_count - 1, 0) WHERE id = ?'
     ).bind(galleryId).run();
+
+    // 본인 삭제 시 포인트 회수
+    if (comment.user_id === userId) {
+      await revokeActivityPoints(c.env.DB, userId, 'comment', `gallery_comment_${commentId}`);
+    }
 
     return success(c, { message: '삭제되었습니다.' });
   } catch (e: any) {
