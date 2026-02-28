@@ -13,6 +13,7 @@ import { scrollRoutes } from './routes/scrolls';
 import { chaosRoutes } from './routes/chaos';
 import { incubatorRoutes } from './routes/incubator';
 import { rankingRoutes, scrapeAllRankings } from './routes/ranking';
+import { mureungRoutes, scrapeMureungRankings, MUREUNG_TOTAL_BATCHES, checkMureungRoundTransition } from './routes/mureung';
 import { pointRoutes } from './routes/points';
 import { shopRoutes } from './routes/shop';
 import { announcementRoutes } from './routes/announcements';
@@ -60,6 +61,7 @@ app.route('/api/announcements', announcementRoutes);
 app.route('/api/roulette', rouletteRoutes);
 app.route('/api/notifications', notificationRoutes);
 app.route('/api/customizations', customizationRoutes);
+app.route('/api/mureung', mureungRoutes);
 
 // 이미지 서빙 (R2)
 app.get('/api/images/*', async (c) => {
@@ -121,9 +123,21 @@ export default {
     return app.fetch(request, env, ctx);
   },
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    // 매시 정각 실행, 시간 기반으로 배치 인덱스 결정 (11개 배치 순환)
     const hour = new Date(event.scheduledTime).getUTCHours();
-    const batchIndex = hour % 11;
-    ctx.waitUntil(scrapeAllRankings(env.DB, batchIndex));
+
+    if (event.cron === '0 * * * *') {
+      // 매시 정각: 캐릭터 랭킹 (11배치 순환, ~11시간마다 전체 갱신)
+      const batchIndex = hour % 11;
+      ctx.waitUntil(scrapeAllRankings(env.DB, batchIndex));
+
+    } else if (event.cron === '30 * * * *') {
+      // 매시 30분: 무릉도장 현재 회차 (12배치 순환, ~12시간마다 전체 갱신)
+      const batchIndex = hour % MUREUNG_TOTAL_BATCHES;
+      ctx.waitUntil(scrapeMureungRankings(env.DB, batchIndex));
+
+    } else if (event.cron === '45 1 * * *') {
+      // 매일 01:45 UTC (10:45 KST): 무릉 회차 전환 감지
+      ctx.waitUntil(checkMureungRoundTransition(env.DB));
+    }
   },
 };

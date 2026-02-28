@@ -103,7 +103,9 @@ authRoutes.post('/login', async (c) => {
 
     const { password_hash, ...userData } = user;
 
-    return success(c, { token, user: userData });
+    const pointBalance = await getBalance(c.env.DB, user.id);
+
+    return success(c, { token, user: { ...userData, point_balance: pointBalance } });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
