@@ -599,10 +599,12 @@ mureungRoutes.get('/history', async (c) => {
         FROM mureung_ranking
         GROUP BY username
       )
-      SELECT m.username, b.score, m.job_name, m.avatar_img, m.usercode
+      SELECT m.username, b.score, m.job_name, m.avatar_img, m.usercode,
+             r.round_start, r.round_end, r.boss_name
       FROM best b
       INNER JOIN mureung_ranking m
         ON m.username = b.username AND m.score = b.score
+      INNER JOIN mureung_rounds r ON m.round_id = r.id
       GROUP BY m.username
       ORDER BY b.score DESC
       LIMIT 10
