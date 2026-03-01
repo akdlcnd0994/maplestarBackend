@@ -422,7 +422,7 @@ postRoutes.post('/:id/comments', authMiddleware, async (c) => {
     }
 
     const result = await c.env.DB.prepare(
-      'INSERT INTO comments (post_id, user_id, parent_id, content) VALUES (?, ?, ?, ?)'
+      `INSERT INTO comments (post_id, user_id, parent_id, content, created_at) VALUES (?, ?, ?, ?, datetime('now', '+9 hours'))`
     ).bind(postId, userId, parentId || null, content).run();
 
     await c.env.DB.prepare(

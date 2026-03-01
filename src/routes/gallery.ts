@@ -125,8 +125,8 @@ galleryRoutes.post('/', authMiddleware, async (c) => {
     const imageUrl = `/api/images/${key}`;
 
     const result = await c.env.DB.prepare(
-      `INSERT INTO gallery (user_id, title, description, image_key, image_url)
-       VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO gallery (user_id, title, description, image_key, image_url, created_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now', '+9 hours'))`
     ).bind(userId, title, description || '', key, imageUrl).run();
 
     const pointResult = await earnActivityPoints(c.env.DB, userId, 'gallery', String(result.meta.last_row_id));
@@ -263,7 +263,7 @@ galleryRoutes.post('/:id/comments', authMiddleware, async (c) => {
     }
 
     const insertResult = await c.env.DB.prepare(
-      'INSERT INTO gallery_comments (gallery_id, user_id, content) VALUES (?, ?, ?)'
+      `INSERT INTO gallery_comments (gallery_id, user_id, content, created_at) VALUES (?, ?, ?, datetime('now', '+9 hours'))`
     ).bind(galleryId, userId, content.trim()).run();
     const commentId = insertResult.meta?.last_row_id;
 
