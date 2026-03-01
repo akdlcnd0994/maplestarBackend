@@ -116,6 +116,12 @@ authRoutes.get('/me', authMiddleware, async (c) => {
   try {
     const { userId } = c.get('user');
 
+    // 마지막 활동 시간 갱신 (1시간 이상 지난 경우에만 write)
+    await c.env.DB.prepare(
+      `UPDATE users SET last_login_at = datetime('now')
+       WHERE id = ? AND (last_login_at IS NULL OR datetime(last_login_at) < datetime('now', '-1 hour'))`
+    ).bind(userId).run();
+
     const user = await c.env.DB.prepare(`
       SELECT u.id, u.username, u.character_name, u.job, u.level, u.discord,
              u.profile_image, u.default_icon, u.profile_zoom, u.role, u.alliance_id, u.is_online, u.created_at,
