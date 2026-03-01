@@ -14,14 +14,18 @@ galleryRoutes.get('/', optionalAuthMiddleware, async (c) => {
     const limit = parseInt(c.req.query('limit') || '20');
     const offset = (page - 1) * limit;
 
+    const currentUser = c.get('user');
+    const currentUserId = currentUser?.userId ?? 0;
+
     const gallery = await c.env.DB.prepare(`
-      SELECT g.*, u.character_name, u.profile_image, u.default_icon, u.profile_zoom, u.active_name_color, u.active_frame, u.active_title, u.active_title_rarity
+      SELECT g.*, u.character_name, u.profile_image, u.default_icon, u.profile_zoom, u.active_name_color, u.active_frame, u.active_title, u.active_title_rarity,
+             CASE WHEN EXISTS (SELECT 1 FROM gallery_likes WHERE gallery_id = g.id AND user_id = ?) THEN 1 ELSE 0 END as is_liked
       FROM gallery g
       LEFT JOIN users u ON g.user_id = u.id
       WHERE g.is_deleted = 0
       ORDER BY g.created_at DESC
       LIMIT ? OFFSET ?
-    `).bind(limit, offset).all<any>();
+    `).bind(currentUserId, limit, offset).all<any>();
 
     const countResult = await c.env.DB.prepare(
       'SELECT COUNT(*) as total FROM gallery WHERE is_deleted = 0'

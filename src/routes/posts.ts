@@ -24,18 +24,22 @@ postRoutes.get('/', optionalAuthMiddleware, async (c) => {
       return error(c, 'NOT_FOUND', '카테고리를 찾을 수 없습니다.', 404);
     }
 
+    const currentUser = c.get('user');
+    const currentUserId = currentUser?.userId ?? 0;
+
     const posts = await c.env.DB.prepare(`
       SELECT p.*, u.character_name, u.job, u.profile_image, u.default_icon, u.profile_zoom, u.role as user_role,
              u.active_name_color, u.active_frame, u.active_title, u.active_title_rarity,
              u.alliance_id, a.name as alliance_name, a.emblem as alliance_emblem, a.is_main as is_main_guild,
-             (SELECT GROUP_CONCAT(image_url) FROM post_images WHERE post_id = p.id) as image_urls
+             (SELECT GROUP_CONCAT(image_url) FROM post_images WHERE post_id = p.id) as image_urls,
+             CASE WHEN EXISTS (SELECT 1 FROM post_likes WHERE post_id = p.id AND user_id = ?) THEN 1 ELSE 0 END as is_liked
       FROM posts p
       LEFT JOIN users u ON p.user_id = u.id
       LEFT JOIN alliances a ON u.alliance_id = a.id
       WHERE p.category_id = ? AND p.is_deleted = 0
       ORDER BY p.is_notice DESC, p.is_recommended DESC, p.created_at DESC
       LIMIT ? OFFSET ?
-    `).bind(cat.id, limit, offset).all<any>();
+    `).bind(currentUserId, cat.id, limit, offset).all<any>();
 
     const countResult = await c.env.DB.prepare(
       'SELECT COUNT(*) as total FROM posts WHERE category_id = ? AND is_deleted = 0'
