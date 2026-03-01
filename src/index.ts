@@ -126,9 +126,8 @@ export default {
     const hour = new Date(event.scheduledTime).getUTCHours();
 
     if (event.cron === '0 * * * *') {
-      // 매시 정각: 캐릭터 랭킹 (11배치 순환, ~11시간마다 전체 갱신)
-      const batchIndex = hour % 11;
-      ctx.waitUntil(scrapeAllRankings(env.DB, batchIndex));
+      // 매시 정각: 캐릭터 랭킹 전체 (Paid 플랜 1000 subrequest 한도 내)
+      ctx.waitUntil(scrapeAllRankings(env.DB));
 
     } else if (event.cron === '30 * * * *') {
       // 매시 30분: 무릉도장 현재 회차 (12배치 순환, ~12시간마다 전체 갱신)

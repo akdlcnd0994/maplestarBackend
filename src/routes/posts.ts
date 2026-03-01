@@ -312,7 +312,7 @@ postRoutes.post('/:id/like', authMiddleware, async (c) => {
 
         // 알림: 게시글 좋아요
         const actor = await c.env.DB.prepare('SELECT character_name FROM users WHERE id = ?').bind(userId).first<{ character_name: string }>();
-        await createNotification(c.env.DB, post.user_id, 'like_post', userId, actor?.character_name || '', 'post', Number(id), post.title || '', `${actor?.character_name}님이 게시글에 좋아요를 눌렀습니다.`);
+        await createNotification(c.env.DB, post.user_id, 'like_post', userId, actor?.character_name || '', post.category_slug || 'showoff', Number(id), post.title || '', `${actor?.character_name}님이 게시글에 좋아요를 눌렀습니다.`);
       }
       return success(c, { liked: true, pointEarned });
     }
@@ -426,7 +426,11 @@ postRoutes.post('/:id/comments', authMiddleware, async (c) => {
     ).bind(postId).run();
 
     // 본인 글에 댓글 시 포인트 미지급
-    const post = await c.env.DB.prepare('SELECT user_id, title, comment_count FROM posts WHERE id = ?').bind(postId).first<{ user_id: number; title: string; comment_count: number }>();
+    const post = await c.env.DB.prepare(
+      `SELECT p.user_id, p.title, p.comment_count, bc.slug as category_slug
+       FROM posts p LEFT JOIN board_categories bc ON p.category_id = bc.id
+       WHERE p.id = ?`
+    ).bind(postId).first<{ user_id: number; title: string; comment_count: number; category_slug: string }>();
     let pointEarned = 0;
 
     if (post && post.user_id !== userId) {
@@ -444,7 +448,7 @@ postRoutes.post('/:id/comments', authMiddleware, async (c) => {
     // 알림: 댓글
     const actor = await c.env.DB.prepare('SELECT character_name FROM users WHERE id = ?').bind(userId).first<{ character_name: string }>();
     if (post && post.user_id !== userId) {
-      await createNotification(c.env.DB, post.user_id, 'comment', userId, actor?.character_name || '', 'post', Number(postId), post.title || '', `${actor?.character_name}님이 댓글을 남겼습니다.`);
+      await createNotification(c.env.DB, post.user_id, 'comment', userId, actor?.character_name || '', post.category_slug || 'showoff', Number(postId), post.title || '', `${actor?.character_name}님이 댓글을 남겼습니다.`);
     }
 
     return success(c, { id: result.meta.last_row_id, pointEarned });
