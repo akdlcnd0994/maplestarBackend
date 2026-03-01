@@ -83,7 +83,7 @@ export async function createNotification(
   try {
     await db.prepare(
       `INSERT INTO notifications (user_id, type, actor_id, actor_name, target_type, target_id, target_title, message, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', '+9 hours'))`
     ).bind(userId, type, actorId, actorName, targetType, targetId, targetTitle || '', message).run();
   } catch (e) {
     console.error('Failed to create notification:', e);
