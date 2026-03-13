@@ -6,8 +6,8 @@ import { getKSTTimestamp } from '../utils/date';
 
 export const rankingRoutes = new Hono<{ Bindings: Env }>();
 
-// jobGroup 범위: 0~5, 10~15, 21~23, 30~33, 35, 41~42
-const JOB_GROUPS = [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 21, 22, 23, 30, 31, 32, 33, 35, 41, 42];
+// jobGroup 범위: 0~5, 10~15, 21~24, 30~33, 35, 41~42 (24=팬텀)
+const JOB_GROUPS = [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 21, 22, 23, 24, 30, 31, 32, 33, 35, 41, 42];
 const MAX_PAGE = 20;
 const BATCH_SIZE = 80;
 
@@ -15,10 +15,10 @@ const BATCH_SIZE = 80;
 const JOB_GROUP_BATCHES = [
   [0, 1], [2, 3], [4, 5],
   [10, 11], [12, 13], [14, 15],
-  [21, 22], [23, 30], [31, 32],
-  [33, 35], [41, 42],
+  [21, 22], [23, 24], [30, 31],
+  [32, 33], [35, 41], [42],
 ];
-const TOTAL_BATCHES = JOB_GROUP_BATCHES.length; // 11
+const TOTAL_BATCHES = JOB_GROUP_BATCHES.length; // 12
 
 interface RankingCharacter {
   userrank: number;

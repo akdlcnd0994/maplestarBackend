@@ -14,15 +14,15 @@ export const MUREUNG_JOB_GROUPS: Record<number, string> = {
   510: '바이퍼', 520: '캡틴', 530: '캐논슈터',
   2110: '아란', 2210: '에반', 2310: '메르세데스',
   3110: '데몬슬레이어', 3210: '배틀메이지', 3310: '와일드헌터',
-  3510: '메카닉', 4110: '하야토', 4210: '칸나',
+  3510: '메카닉', 4110: '하야토', 4210: '칸나', 2410: '팬텀',
 };
 
-// 12배치 (2직업씩 × 11 + 마지막 1직업)
+// 12배치 (2직업씩 × 11 + 마지막 2직업)
 export const MUREUNG_BATCHES: number[][] = [
   [110, 120], [130, 210], [220, 230],
   [310, 320], [410, 420], [430, 510],
   [520, 530], [2110, 2210], [2310, 3110],
-  [3210, 3310], [3510, 4110], [4210],
+  [3210, 3310], [3510, 4110], [4210, 2410],
 ];
 export const MUREUNG_TOTAL_BATCHES = MUREUNG_BATCHES.length; // 12
 
@@ -62,7 +62,7 @@ interface RoundInfo {
 /**
  * 현재 회차 정보 파싱 (date 파라미터 없이 fetch한 HTML)
  * visibleDates의 마지막 완료 회차에서 +14일 = 현재 진행 중인 회차 시작일
- * 현재 회차 보스명은 HTML에 노출되지 않으므로 '' 처리
+ * 현재 회차 보스명은 HTML 텍스트의 "M/D/YYYY~M/D/YYYY (보스명)" 패턴에서 파싱
  */
 function parseRoundInfo(html: string): RoundInfo | null {
   // mureungId 목록 추출 (RSC visibleDates 데이터)
@@ -83,7 +83,11 @@ function parseRoundInfo(html: string): RoundInfo | null {
   const roundEnd   = endDate.toISOString().slice(0, 10);
   const roundKey   = `${roundStart}~${roundEnd}`;
 
-  return { roundKey, roundStart, roundEnd, bossName: '' }; // 현재 회차 보스명은 미공개
+  // 현재 회차 보스명 파싱: HTML 텍스트에 "M/D/YYYY~M/D/YYYY (보스명)" 형식으로 첫 번째 노출
+  const bossMatch = html.match(/\d{1,2}\/\d{1,2}\/\d{4}~\d{1,2}\/\d{1,2}\/\d{4}\s*\(([^)]+)\)/);
+  const bossName = bossMatch ? bossMatch[1].trim() : '';
+
+  return { roundKey, roundStart, roundEnd, bossName };
 }
 
 /**
@@ -437,8 +441,8 @@ export async function checkMureungRoundTransition(
       // 새 회차 INSERT OR IGNORE
       await db.prepare(
         `INSERT OR IGNORE INTO mureung_rounds (round_key, round_start, round_end, boss_name, is_current, scraped_at)
-         VALUES (?, ?, ?, '', 1, ?)`
-      ).bind(roundInfo.roundKey, roundInfo.roundStart, roundInfo.roundEnd, scrapedAt).run();
+         VALUES (?, ?, ?, ?, 1, ?)`
+      ).bind(roundInfo.roundKey, roundInfo.roundStart, roundInfo.roundEnd, roundInfo.bossName, scrapedAt).run();
 
       // 이미 존재하던 경우도 is_current = 1 갱신
       await db.prepare(
