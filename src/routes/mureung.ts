@@ -469,7 +469,8 @@ export async function checkMureungRoundTransition(
 // ==================== API 엔드포인트 ====================
 
 function setCacheHeaders(c: any, ttlSeconds: number) {
-  c.header('Cache-Control', `public, max-age=${ttlSeconds}, s-maxage=${ttlSeconds}, stale-while-revalidate=60`);
+  // private: 브라우저(프론트 메모리 캐시)만 사용, CDN 캐시 방지 (DB 업데이트 즉시 반영)
+  c.header('Cache-Control', `private, max-age=${ttlSeconds}`);
 }
 
 // 현재 회차 전직업 종합랭킹 (개인 최고 점수 기준, 상위 50명)
