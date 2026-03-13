@@ -458,6 +458,10 @@ export async function checkMureungRoundTransition(
 
 // ==================== API 엔드포인트 ====================
 
+function setCacheHeaders(c: any, ttlSeconds: number) {
+  c.header('Cache-Control', `public, max-age=${ttlSeconds}, s-maxage=${ttlSeconds}, stale-while-revalidate=60`);
+}
+
 // 현재 회차 전직업 종합랭킹 (개인 최고 점수 기준, 상위 50명)
 mureungRoutes.get('/overall', async (c) => {
   try {
@@ -512,6 +516,8 @@ mureungRoutes.get('/overall', async (c) => {
       LIMIT 50
     `).bind(roundId, roundId).all();
 
+    const ttl = roundParam ? 3600 : 300; // 과거 회차: 1시간, 현재 회차: 5분
+    setCacheHeaders(c, ttl);
     return success(c, { round, rankings: results });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
@@ -579,6 +585,8 @@ mureungRoutes.get('/job', async (c) => {
       LIMIT ?
     `).bind(roundId, roundId, jobGroup, parseInt(limitParam)).all();
 
+    const ttl = roundParam ? 3600 : 300;
+    setCacheHeaders(c, ttl);
     return success(c, {
       round,
       jobGroup,
@@ -609,6 +617,7 @@ mureungRoutes.get('/history', async (c) => {
       ORDER BY b.score DESC
       LIMIT 10
     `).all();
+    setCacheHeaders(c, 1800); // 역대 기록: 30분
     return success(c, results);
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
@@ -621,6 +630,7 @@ mureungRoutes.get('/rounds', async (c) => {
     const { results } = await c.env.DB.prepare(
       'SELECT * FROM mureung_rounds ORDER BY round_start DESC LIMIT 50'
     ).all();
+    setCacheHeaders(c, 3600); // 회차 목록: 1시간
     return success(c, results);
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
