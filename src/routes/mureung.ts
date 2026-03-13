@@ -83,9 +83,14 @@ function parseRoundInfo(html: string): RoundInfo | null {
   const roundEnd   = endDate.toISOString().slice(0, 10);
   const roundKey   = `${roundStart}~${roundEnd}`;
 
-  // 현재 회차 보스명 파싱: HTML 텍스트에 "M/D/YYYY~M/D/YYYY (보스명)" 형식으로 첫 번째 노출
-  const bossMatch = html.match(/\d{1,2}\/\d{1,2}\/\d{4}~\d{1,2}\/\d{1,2}\/\d{4}\s*\(([^)]+)\)/);
-  const bossName = bossMatch ? bossMatch[1].trim() : '';
+  // 현재 회차 보스명 파싱: roundStart(YYYY-MM-DD)를 M/D/YYYY로 변환 후 해당 날짜 기준 매칭
+  // HTML에 "M/D/YYYY~M/D/YYYY (보스명)" 형식으로 노출되므로 현재 회차 시작일로 정확히 매칭
+  const [yr, mo, dy] = roundStart.split('-');
+  const startMDY = `${parseInt(mo)}/${parseInt(dy)}/${yr}`; // e.g. "3/9/2026"
+  const bossMatch = html.match(
+    new RegExp(startMDY.replace(/\//g, '\\/') + '~[\\d/]+\\s*\\(([^)]+)\\)')
+  );
+  const bossName = bossMatch ? bossMatch[1].trim() : ''; // 미공개 시 '' 반환
 
   return { roundKey, roundStart, roundEnd, bossName };
 }
@@ -217,10 +222,11 @@ export async function scrapeMureungRankings(
               roundId = inserted.meta?.last_row_id as number;
             }
 
-            // 최신 회차로 업데이트 (is_current = 1)
+            // 최신 회차로 업데이트 (is_current = 1, boss_name이 비어있으면 파싱값으로 갱신)
             await db
-              .prepare('UPDATE mureung_rounds SET is_current = 1, scraped_at = ? WHERE id = ?')
-              .bind(scrapedAt, roundId)
+              .prepare(`UPDATE mureung_rounds SET is_current = 1, scraped_at = ?,
+                boss_name = CASE WHEN boss_name = '' THEN ? ELSE boss_name END WHERE id = ?`)
+              .bind(scrapedAt, roundInfo.bossName, roundId)
               .run();
           }
         }
