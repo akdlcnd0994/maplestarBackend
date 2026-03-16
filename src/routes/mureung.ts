@@ -37,7 +37,8 @@ const KNOWN_MUREUNG_HISTORY = [
   { mureungId: '20260112', bossName: '모리 란마루', roundStart: '2026-01-12', roundEnd: '2026-01-26' },
   { mureungId: '20260126', bossName: '자쿰',        roundStart: '2026-01-26', roundEnd: '2026-02-09' },
   { mureungId: '20260209', bossName: '혼테일',      roundStart: '2026-02-09', roundEnd: '2026-02-23' },
-  // 현재 진행 중인 회차(2026-02-23~)는 일반 scrapeMureungRankings로 처리
+  { mureungId: '20260223', bossName: '반레온',      roundStart: '2026-02-23', roundEnd: '2026-03-09' },
+  // 현재 진행 중인 회차(2026-03-09~)는 일반 scrapeMureungRankings로 처리
 ];
 
 const MAX_PAGE = 20;
@@ -675,6 +676,121 @@ mureungRoutes.post('/scrape-all-history', authMiddleware, requireRole('master'),
       errors: result.errors,
       rounds: result.rounds,
     });
+  } catch (e: any) {
+    return error(c, 'SERVER_ERROR', e.message, 500);
+  }
+});
+
+// 회차별 길드 랭킹 (금/은/동 메달 집계)
+mureungRoutes.get('/guild-ranking', async (c) => {
+  try {
+    const roundParam = c.req.query('roundId');
+    let roundId: number | null = null;
+
+    if (roundParam) {
+      roundId = parseInt(roundParam);
+    } else {
+      const current = await c.env.DB.prepare(
+        'SELECT id FROM mureung_rounds WHERE is_current = 1 ORDER BY round_start DESC LIMIT 1'
+      ).first<{ id: number }>();
+      roundId = current?.id ?? null;
+    }
+
+    if (!roundId) {
+      return success(c, { round: null, rankings: [] });
+    }
+
+    const round = await c.env.DB.prepare(
+      'SELECT * FROM mureung_rounds WHERE id = ?'
+    ).bind(roundId).first();
+
+    // 길드별 상위 30명 기준 메달 집계 + 총합 점수
+    const { results: guildStats } = await c.env.DB.prepare(`
+      WITH rc_latest AS (
+        SELECT username, userguild
+        FROM ranking_characters
+        WHERE userguild != '' AND userguild IS NOT NULL
+        GROUP BY username
+      ),
+      round_entries AS (
+        SELECT mr.job_group, mr.rank, mr.username, mr.score, mr.job_name, mr.avatar_img,
+               rc.userguild AS guild
+        FROM mureung_ranking mr
+        INNER JOIN rc_latest rc ON rc.username = mr.username
+        WHERE mr.round_id = ?
+      ),
+      char_best AS (
+        SELECT guild, username, MAX(score) AS best_score
+        FROM round_entries
+        GROUP BY guild, username
+      ),
+      top30 AS (
+        SELECT guild, username, best_score,
+               ROW_NUMBER() OVER (PARTITION BY guild ORDER BY best_score DESC) AS rn
+        FROM char_best
+      ),
+      medal_counts AS (
+        SELECT re.guild,
+          SUM(CASE WHEN re.rank = 1 THEN 1 ELSE 0 END) AS gold,
+          SUM(CASE WHEN re.rank = 2 THEN 1 ELSE 0 END) AS silver,
+          SUM(CASE WHEN re.rank = 3 THEN 1 ELSE 0 END) AS bronze
+        FROM round_entries re
+        INNER JOIN top30 t ON t.guild = re.guild AND t.username = re.username AND t.rn <= 30
+        WHERE re.rank IN (1, 2, 3)
+        GROUP BY re.guild
+      ),
+      total_scores AS (
+        SELECT guild, SUM(best_score) AS total_score, COUNT(*) AS member_count
+        FROM top30
+        WHERE rn <= 30
+        GROUP BY guild
+      )
+      SELECT
+        mc.guild,
+        mc.gold, mc.silver, mc.bronze,
+        COALESCE(ts.total_score, 0) AS total_score,
+        COALESCE(ts.member_count, 0) AS member_count,
+        ROW_NUMBER() OVER (ORDER BY mc.gold DESC, mc.silver DESC, mc.bronze DESC, COALESCE(ts.total_score, 0) DESC) AS guild_rank
+      FROM medal_counts mc
+      LEFT JOIN total_scores ts ON ts.guild = mc.guild
+      ORDER BY guild_rank
+    `).bind(roundId).all();
+
+    // 길드별 상위 30명 전체 (유저별 최고점 1행)
+    const { results: medalMembers } = await c.env.DB.prepare(`
+      WITH rc_latest AS (
+        SELECT username, userguild
+        FROM ranking_characters
+        WHERE userguild != '' AND userguild IS NOT NULL
+        GROUP BY username
+      ),
+      round_entries AS (
+        SELECT mr.rank, mr.username, mr.score, mr.job_name, mr.avatar_img,
+               rc.userguild AS guild
+        FROM mureung_ranking mr
+        INNER JOIN rc_latest rc ON rc.username = mr.username
+        WHERE mr.round_id = ?
+      ),
+      deduped AS (
+        SELECT guild, username, rank, score, job_name, avatar_img,
+               ROW_NUMBER() OVER (PARTITION BY guild, username ORDER BY score DESC) AS rn_inner
+        FROM round_entries
+      ),
+      top30 AS (
+        SELECT guild, username, rank, score, job_name, avatar_img,
+               ROW_NUMBER() OVER (PARTITION BY guild ORDER BY score DESC) AS rn
+        FROM deduped
+        WHERE rn_inner = 1
+      )
+      SELECT guild, username, rank, score, job_name, avatar_img
+      FROM top30
+      WHERE rn <= 30
+      ORDER BY guild, score DESC
+    `).bind(roundId).all();
+
+    const ttl = roundParam ? 3600 : 300;
+    setCacheHeaders(c, ttl);
+    return success(c, { round, rankings: guildStats, medal_members: medalMembers });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
