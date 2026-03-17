@@ -6,6 +6,25 @@ import { getKSTTimestamp } from '../utils/date';
 
 export const rankingRoutes = new Hono<{ Bindings: Env }>();
 
+const RANKING_CACHE_TTL = 3600; // 매시 정각 스크래핑 주기와 동일 (1시간)
+
+/** URL 기반 TTL 캐싱 헬퍼 — 캐시 히트 시 DB 조회 없이 즉시 반환 */
+async function withCache(c: any, fetchFn: () => Promise<any>): Promise<Response> {
+  const cacheKey = new Request(c.req.url);
+  const cached = await caches.default.match(cacheKey);
+  if (cached) return cached;
+
+  const data = await fetchFn();
+  const resp = new Response(JSON.stringify({ success: true, data }), {
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': `public, max-age=${RANKING_CACHE_TTL}`,
+    },
+  });
+  c.executionCtx.waitUntil(caches.default.put(cacheKey, resp.clone()));
+  return resp;
+}
+
 // jobGroup 범위: 0~5, 10~15, 21~24, 30~33, 35, 41~42 (24=팬텀)
 const JOB_GROUPS = [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 21, 22, 23, 24, 30, 31, 32, 33, 35, 41, 42];
 const MAX_PAGE = 20;
@@ -175,35 +194,37 @@ export async function scrapeAllRankings(db: D1Database, batchIndex?: number): Pr
 // 랭킹 데이터 조회 API (최신 스냅샷만)
 rankingRoutes.get('/', async (c) => {
   try {
-    const username = c.req.query('username');
-    const guild = c.req.query('guild');
-    const job = c.req.query('job');
-    const limit = parseInt(c.req.query('limit') || '100');
+    return await withCache(c, async () => {
+      const username = c.req.query('username');
+      const guild = c.req.query('guild');
+      const job = c.req.query('job');
+      const limit = parseInt(c.req.query('limit') || '100');
 
-    let query = `SELECT rc.* FROM ranking_characters rc
-      INNER JOIN (SELECT username, MAX(userindex) as max_idx FROM ranking_characters GROUP BY username) latest
-      ON rc.username = latest.username AND rc.userindex = latest.max_idx
-      WHERE 1=1`;
-    const params: any[] = [];
+      let query = `SELECT rc.* FROM ranking_characters rc
+        INNER JOIN (SELECT username, MAX(userindex) as max_idx FROM ranking_characters GROUP BY username) latest
+        ON rc.username = latest.username AND rc.userindex = latest.max_idx
+        WHERE 1=1`;
+      const params: any[] = [];
 
-    if (username) {
-      query += ' AND rc.username LIKE ?';
-      params.push(`%${username}%`);
-    }
-    if (guild) {
-      query += ' AND rc.userguild = ?';
-      params.push(guild);
-    }
-    if (job) {
-      query += ' AND rc.userjob = ?';
-      params.push(job);
-    }
+      if (username) {
+        query += ' AND rc.username LIKE ?';
+        params.push(`%${username}%`);
+      }
+      if (guild) {
+        query += ' AND rc.userguild = ?';
+        params.push(guild);
+      }
+      if (job) {
+        query += ' AND rc.userjob = ?';
+        params.push(job);
+      }
 
-    query += ' ORDER BY rc.userrank ASC LIMIT ?';
-    params.push(limit);
+      query += ' ORDER BY rc.userrank ASC LIMIT ?';
+      params.push(limit);
 
-    const result = await c.env.DB.prepare(query).bind(...params).all();
-    return success(c, result.results);
+      const result = await c.env.DB.prepare(query).bind(...params).all();
+      return result.results;
+    });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
@@ -212,41 +233,34 @@ rankingRoutes.get('/', async (c) => {
 // 특정 캐릭터의 본캐/부캐 조회 (히스토리 기반 - 영구 연결)
 rankingRoutes.get('/alts/:username', async (c) => {
   try {
-    const username = c.req.param('username');
+    return await withCache(c, async () => {
+      const username = c.req.param('username');
 
-    // 해당 캐릭터가 사용했던 모든 usercode 조회 (히스토리)
-    const codeHistory = await c.env.DB.prepare(
-      'SELECT DISTINCT usercode FROM character_code_history WHERE username = ?'
-    ).bind(username).all();
+      const codeHistory = await c.env.DB.prepare(
+        'SELECT DISTINCT usercode FROM character_code_history WHERE username = ?'
+      ).bind(username).all();
 
-    const codes = (codeHistory.results as any[]).map((r: any) => r.usercode);
-    if (codes.length === 0) {
-      return success(c, { character: null, alt_characters: [] });
-    }
+      const codes = (codeHistory.results as any[]).map((r: any) => r.usercode);
+      if (codes.length === 0) return { character: null, alt_characters: [] };
 
-    // 해당 usercode들을 사용했던 모든 캐릭터 조회 (히스토리)
-    const codePlaceholders = codes.map(() => '?').join(',');
-    const linkedUsernames = await c.env.DB.prepare(
-      `SELECT DISTINCT username FROM character_code_history WHERE usercode IN (${codePlaceholders})`
-    ).bind(...codes).all();
+      const codePlaceholders = codes.map(() => '?').join(',');
+      const linkedUsernames = await c.env.DB.prepare(
+        `SELECT DISTINCT username FROM character_code_history WHERE usercode IN (${codePlaceholders})`
+      ).bind(...codes).all();
 
-    const allNames = (linkedUsernames.results as any[]).map((r: any) => r.username);
-    if (allNames.length === 0) {
-      return success(c, { character: null, alt_characters: [] });
-    }
+      const allNames = (linkedUsernames.results as any[]).map((r: any) => r.username);
+      if (allNames.length === 0) return { character: null, alt_characters: [] };
 
-    // 연결된 모든 캐릭터의 최신 랭킹 데이터 조회
-    const namePlaceholders = allNames.map(() => '?').join(',');
-    const characters = await c.env.DB.prepare(
-      `SELECT rc.username, rc.userlevel, rc.userjob, rc.userrank, rc.userguild, rc.usercode, rc.avatar_img
-       FROM ranking_characters rc
-       INNER JOIN (SELECT username, MAX(userindex) as max_idx FROM ranking_characters WHERE username IN (${namePlaceholders}) GROUP BY username) latest
-       ON rc.username = latest.username AND rc.userindex = latest.max_idx
-       ORDER BY rc.userlevel DESC`
-    ).bind(...allNames).all();
+      const namePlaceholders = allNames.map(() => '?').join(',');
+      const characters = await c.env.DB.prepare(
+        `SELECT rc.username, rc.userlevel, rc.userjob, rc.userrank, rc.userguild, rc.usercode, rc.avatar_img
+         FROM ranking_characters rc
+         INNER JOIN (SELECT username, MAX(userindex) as max_idx FROM ranking_characters WHERE username IN (${namePlaceholders}) GROUP BY username) latest
+         ON rc.username = latest.username AND rc.userindex = latest.max_idx
+         ORDER BY rc.userlevel DESC`
+      ).bind(...allNames).all();
 
-    return success(c, {
-      characters: characters.results,
+      return { characters: characters.results };
     });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
@@ -256,23 +270,24 @@ rankingRoutes.get('/alts/:username', async (c) => {
 // 특정 캐릭터 레벨 변화 이력 조회
 rankingRoutes.get('/history/:username', async (c) => {
   try {
-    const username = c.req.param('username');
-    const days = parseInt(c.req.query('days') || '30');
+    return await withCache(c, async () => {
+      const username = c.req.param('username');
+      const days = parseInt(c.req.query('days') || '30');
 
-    // KST 기준 threshold 계산
-    const now = new Date();
-    now.setHours(now.getHours() + 9); // UTC → KST
-    now.setDate(now.getDate() - days);
-    const threshold = now.toISOString().slice(0, 10);
+      const now = new Date();
+      now.setHours(now.getHours() + 9);
+      now.setDate(now.getDate() - days);
+      const threshold = now.toISOString().slice(0, 10);
 
-    const result = await c.env.DB.prepare(
-      `SELECT userlevel, userjob, userrank, userguild, userdate, usertime, avatar_img
-       FROM ranking_characters
-       WHERE username = ? AND userdate >= ?
-       ORDER BY userdate ASC, usertime ASC`
-    ).bind(username, threshold).all();
+      const result = await c.env.DB.prepare(
+        `SELECT userlevel, userjob, userrank, userguild, userdate, usertime, avatar_img
+         FROM ranking_characters
+         WHERE username = ? AND userdate >= ?
+         ORDER BY userdate ASC, usertime ASC`
+      ).bind(username, threshold).all();
 
-    return success(c, result.results);
+      return result.results;
+    });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
@@ -281,51 +296,46 @@ rankingRoutes.get('/history/:username', async (c) => {
 // 본캐+부캐 전체 히스토리 조회 (차트용)
 rankingRoutes.get('/history/:username/alts', async (c) => {
   try {
-    const username = c.req.param('username');
-    const days = parseInt(c.req.query('days') || '30');
+    return await withCache(c, async () => {
+      const username = c.req.param('username');
+      const days = parseInt(c.req.query('days') || '30');
 
-    const now = new Date();
-    now.setHours(now.getHours() + 9);
-    now.setDate(now.getDate() - days);
-    const threshold = now.toISOString().slice(0, 10);
+      const now = new Date();
+      now.setHours(now.getHours() + 9);
+      now.setDate(now.getDate() - days);
+      const threshold = now.toISOString().slice(0, 10);
 
-    // 본캐/부캐 연결된 모든 캐릭터 이름 조회
-    const codeHistory = await c.env.DB.prepare(
-      'SELECT DISTINCT usercode FROM character_code_history WHERE username = ?'
-    ).bind(username).all();
+      const codeHistory = await c.env.DB.prepare(
+        'SELECT DISTINCT usercode FROM character_code_history WHERE username = ?'
+      ).bind(username).all();
 
-    const codes = (codeHistory.results as any[]).map((r: any) => r.usercode);
-    if (codes.length === 0) {
-      return success(c, { characters: {} });
-    }
+      const codes = (codeHistory.results as any[]).map((r: any) => r.usercode);
+      if (codes.length === 0) return { characters: {} };
 
-    const codePlaceholders = codes.map(() => '?').join(',');
-    const linkedNames = await c.env.DB.prepare(
-      `SELECT DISTINCT username FROM character_code_history WHERE usercode IN (${codePlaceholders})`
-    ).bind(...codes).all();
+      const codePlaceholders = codes.map(() => '?').join(',');
+      const linkedNames = await c.env.DB.prepare(
+        `SELECT DISTINCT username FROM character_code_history WHERE usercode IN (${codePlaceholders})`
+      ).bind(...codes).all();
 
-    const allNames = (linkedNames.results as any[]).map((r: any) => r.username);
-    if (allNames.length === 0) {
-      return success(c, { characters: {} });
-    }
+      const allNames = (linkedNames.results as any[]).map((r: any) => r.username);
+      if (allNames.length === 0) return { characters: {} };
 
-    // 모든 연결 캐릭터의 히스토리 조회
-    const namePlaceholders = allNames.map(() => '?').join(',');
-    const history = await c.env.DB.prepare(
-      `SELECT username, userlevel, userjob, userrank, userguild, userdate, usertime, avatar_img
-       FROM ranking_characters
-       WHERE username IN (${namePlaceholders}) AND userdate >= ?
-       ORDER BY userdate ASC, usertime ASC`
-    ).bind(...allNames, threshold).all();
+      const namePlaceholders = allNames.map(() => '?').join(',');
+      const history = await c.env.DB.prepare(
+        `SELECT username, userlevel, userjob, userrank, userguild, userdate, usertime, avatar_img
+         FROM ranking_characters
+         WHERE username IN (${namePlaceholders}) AND userdate >= ?
+         ORDER BY userdate ASC, usertime ASC`
+      ).bind(...allNames, threshold).all();
 
-    // 캐릭터별로 그룹화
-    const grouped: Record<string, any[]> = {};
-    for (const row of history.results as any[]) {
-      if (!grouped[row.username]) grouped[row.username] = [];
-      grouped[row.username].push(row);
-    }
+      const grouped: Record<string, any[]> = {};
+      for (const row of history.results as any[]) {
+        if (!grouped[row.username]) grouped[row.username] = [];
+        grouped[row.username].push(row);
+      }
 
-    return success(c, { characters: grouped });
+      return { characters: grouped };
+    });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
