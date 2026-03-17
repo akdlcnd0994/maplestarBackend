@@ -305,16 +305,19 @@ export async function scrapeMureungRankings(
  * 역대 무릉도장 회차 전체 스크래핑
  * KNOWN_MUREUNG_HISTORY의 모든 과거 회차를 순차적으로 스크래핑
  * (로컬 개발 환경 전용 — 프로덕션에서는 subrequest 제한에 걸릴 수 있음)
+ * force=true 이면 이미 데이터가 있는 회차도 재크롤링
  */
 export async function scrapeAllMureungHistory(
-  db: D1Database
-): Promise<{ total: number; errors: number; rounds: number }> {
+  db: D1Database,
+  force = false
+): Promise<{ total: number; errors: number; rounds: number; skipped: number }> {
   const { date, time: rawTime } = getKSTTimestamp();
   const scrapedAt = `${date} ${rawTime}`;
   const jobGroupList = Object.keys(MUREUNG_JOB_GROUPS).map(Number);
 
   let total = 0;
   let errors = 0;
+  let skipped = 0;
 
   for (const knownRound of KNOWN_MUREUNG_HISTORY) {
     const roundKey = `${knownRound.roundStart}~${knownRound.roundEnd}`;
@@ -328,6 +331,20 @@ export async function scrapeAllMureungHistory(
 
     if (existing) {
       roundId = existing.id;
+
+      // force=false 이면 이미 데이터가 있는 회차는 스킵
+      if (!force) {
+        const count = await db
+          .prepare('SELECT COUNT(*) as cnt FROM mureung_ranking WHERE round_id = ?')
+          .bind(roundId)
+          .first<{ cnt: number }>();
+        if (count && count.cnt > 0) {
+          console.log(`역대 무릉 스킵: ${knownRound.bossName}(${knownRound.mureungId}) 이미 ${count.cnt}건 존재`);
+          total += count.cnt;
+          skipped++;
+          continue;
+        }
+      }
     } else {
       const inserted = await db
         .prepare(
@@ -411,7 +428,7 @@ export async function scrapeAllMureungHistory(
     );
   }
 
-  return { total, errors, rounds: KNOWN_MUREUNG_HISTORY.length };
+  return { total, errors, rounds: KNOWN_MUREUNG_HISTORY.length, skipped };
 }
 
 /**
@@ -467,6 +484,21 @@ export async function checkMureungRoundTransition(
   }
 }
 
+/**
+ * 현재 회차 서버 캐시 무효화 (매시 35분 실행)
+ * roundId 없는 기본 조회 URL들을 삭제 → 다음 요청 시 DB 조회 후 자동 재캐싱
+ */
+export async function invalidateCurrentRoundCache(workerHost: string): Promise<void> {
+  const cache = caches.default;
+  const urls = [
+    `${workerHost}/api/mureung/overall`,
+    `${workerHost}/api/mureung/guild-ranking`,
+    ...Object.keys(MUREUNG_JOB_GROUPS).map(jg => `${workerHost}/api/mureung/job?jobGroup=${jg}`),
+  ];
+  const results = await Promise.all(urls.map(url => cache.delete(new Request(url))));
+  console.log(`무릉 현재 회차 캐시 무효화: ${results.filter(Boolean).length}/${urls.length}개 삭제`);
+}
+
 // ==================== API 엔드포인트 ====================
 
 function setCacheHeaders(c: any, ttlSeconds: number) {
@@ -478,6 +510,11 @@ function setCacheHeaders(c: any, ttlSeconds: number) {
 mureungRoutes.get('/overall', async (c) => {
   try {
     const roundParam = c.req.query('roundId');
+
+    // 서버 캐시 체크 (현재 회차 기본 조회 + 과거 회차 모두)
+    const cached = await caches.default.match(new Request(c.req.url));
+    if (cached) return cached;
+
     let roundId: number | null = null;
 
     if (roundParam) {
@@ -495,7 +532,7 @@ mureungRoutes.get('/overall', async (c) => {
 
     const round = await c.env.DB.prepare(
       'SELECT * FROM mureung_rounds WHERE id = ?'
-    ).bind(roundId).first();
+    ).bind(roundId).first<{ id: number; is_current: number; [key: string]: any }>();
 
     const { results } = await c.env.DB.prepare(`
       WITH cur AS (
@@ -530,9 +567,17 @@ mureungRoutes.get('/overall', async (c) => {
       LIMIT 50
     `).bind(roundId, roundId).all();
 
-    const ttl = roundParam ? 3600 : 300; // 과거 회차: 1시간, 현재 회차: 5분
-    setCacheHeaders(c, ttl);
-    return success(c, { round, rankings: results });
+    const isPast = round && !round.is_current;
+    // 현재 회차는 roundId 없는 URL로만 캐싱 (고정 URL이어야 35분 무효화 시 삭제 가능)
+    const shouldCache = isPast || !roundParam;
+
+    const resp = success(c, { round, rankings: results });
+
+    if (shouldCache) {
+      c.executionCtx.waitUntil(caches.default.put(new Request(c.req.url), resp.clone()));
+    }
+
+    return resp;
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
@@ -554,6 +599,10 @@ mureungRoutes.get('/job', async (c) => {
       return error(c, 'BAD_REQUEST', '유효하지 않은 jobGroup입니다.', 400);
     }
 
+    // 서버 캐시 체크
+    const cached = await caches.default.match(new Request(c.req.url));
+    if (cached) return cached;
+
     let roundId: number | null = null;
     if (roundParam) {
       roundId = parseInt(roundParam);
@@ -570,7 +619,7 @@ mureungRoutes.get('/job', async (c) => {
 
     const round = await c.env.DB.prepare(
       'SELECT * FROM mureung_rounds WHERE id = ?'
-    ).bind(roundId).first();
+    ).bind(roundId).first<{ id: number; is_current: number; [key: string]: any }>();
 
     const { results } = await c.env.DB.prepare(`
       WITH prev_id AS (
@@ -601,14 +650,21 @@ mureungRoutes.get('/job', async (c) => {
       LIMIT ?
     `).bind(roundId, roundId, jobGroup, parseInt(limitParam)).all();
 
-    const ttl = roundParam ? 3600 : 300;
-    setCacheHeaders(c, ttl);
-    return success(c, {
+    const isPast = round && !round.is_current;
+    const shouldCache = isPast || !roundParam;
+
+    const resp = success(c, {
       round,
       jobGroup,
       jobName: MUREUNG_JOB_GROUPS[jobGroup],
       rankings: results,
     });
+
+    if (shouldCache) {
+      c.executionCtx.waitUntil(caches.default.put(new Request(c.req.url), resp.clone()));
+    }
+
+    return resp;
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
@@ -671,14 +727,17 @@ mureungRoutes.post('/scrape', authMiddleware, requireRole('master'), async (c) =
 });
 
 // 역대 기록 전체 스크래핑 (master 전용, 로컬 환경 권장)
+// ?force=true 이면 이미 데이터 있는 회차도 강제 재크롤링
 mureungRoutes.post('/scrape-all-history', authMiddleware, requireRole('master'), async (c) => {
   try {
-    const result = await scrapeAllMureungHistory(c.env.DB);
+    const force = c.req.query('force') === 'true';
+    const result = await scrapeAllMureungHistory(c.env.DB, force);
     return success(c, {
-      message: `역대 무릉 스크래핑 완료: ${result.rounds}회차 ${result.total}건 저장, ${result.errors}건 오류`,
+      message: `역대 무릉 스크래핑 완료: ${result.rounds}회차 ${result.total}건 저장, ${result.skipped}회차 스킵, ${result.errors}건 오류`,
       total: result.total,
       errors: result.errors,
       rounds: result.rounds,
+      skipped: result.skipped,
     });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
@@ -689,6 +748,11 @@ mureungRoutes.post('/scrape-all-history', authMiddleware, requireRole('master'),
 mureungRoutes.get('/guild-ranking', async (c) => {
   try {
     const roundParam = c.req.query('roundId');
+
+    // 서버 캐시 체크
+    const cached = await caches.default.match(new Request(c.req.url));
+    if (cached) return cached;
+
     let roundId: number | null = null;
 
     if (roundParam) {
@@ -706,7 +770,7 @@ mureungRoutes.get('/guild-ranking', async (c) => {
 
     const round = await c.env.DB.prepare(
       'SELECT * FROM mureung_rounds WHERE id = ?'
-    ).bind(roundId).first();
+    ).bind(roundId).first<{ id: number; is_current: number; [key: string]: any }>();
 
     // 길드별 상위 30명 기준 메달 집계 + 총합 점수
     const { results: guildStats } = await c.env.DB.prepare(`
@@ -796,9 +860,16 @@ mureungRoutes.get('/guild-ranking', async (c) => {
       ORDER BY guild, score DESC
     `).bind(roundId).all();
 
-    const ttl = roundParam ? 3600 : 300;
-    setCacheHeaders(c, ttl);
-    return success(c, { round, rankings: guildStats, medal_members: medalMembers });
+    const isPast = round && !round.is_current;
+    const shouldCache = isPast || !roundParam;
+
+    const resp = success(c, { round, rankings: guildStats, medal_members: medalMembers });
+
+    if (shouldCache) {
+      c.executionCtx.waitUntil(caches.default.put(new Request(c.req.url), resp.clone()));
+    }
+
+    return resp;
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
