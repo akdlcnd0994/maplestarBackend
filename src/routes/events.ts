@@ -3,7 +3,7 @@ import { Env } from '../index';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { success, error, notFound } from '../utils/response';
 import { getTodayKST } from '../utils/date';
-import { earnActivityPoints } from '../services/points';
+import { earnActivityPoints, revokeActivityPoints } from '../services/points';
 
 export const eventRoutes = new Hono<{ Bindings: Env }>();
 
@@ -79,6 +79,8 @@ eventRoutes.post('/:id/join', authMiddleware, async (c) => {
         c.env.DB.prepare('DELETE FROM event_participants WHERE event_id = ? AND user_id = ?').bind(id, userId),
         c.env.DB.prepare('UPDATE events SET current_participants = current_participants - 1 WHERE id = ?').bind(id),
       ]);
+      // 참가 취소 시 포인트 회수
+      await revokeActivityPoints(c.env.DB, userId, 'event_join', id);
       return success(c, { joined: false, message: '참가가 취소되었습니다.' });
     }
 
