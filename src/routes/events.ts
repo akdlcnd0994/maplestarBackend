@@ -3,7 +3,7 @@ import { Env } from '../index';
 import { authMiddleware, requireRole } from '../middleware/auth';
 import { success, error, notFound } from '../utils/response';
 import { getTodayKST } from '../utils/date';
-import { earnActivityPoints, revokeActivityPoints } from '../services/points';
+import { earnActivityPoints } from '../services/points';
 
 export const eventRoutes = new Hono<{ Bindings: Env }>();
 
@@ -79,16 +79,7 @@ eventRoutes.post('/:id/join', authMiddleware, async (c) => {
         c.env.DB.prepare('DELETE FROM event_participants WHERE event_id = ? AND user_id = ?').bind(id, userId),
         c.env.DB.prepare('UPDATE events SET current_participants = current_participants - 1 WHERE id = ?').bind(id),
       ]);
-      // 실제로 포인트가 순지급된 경우에만 회수 (중복 참가로 포인트 미지급 시 회수 방지)
-      const netCheck = await c.env.DB.prepare(
-        `SELECT COALESCE(SUM(CASE WHEN type = 'earn' THEN amount ELSE 0 END), 0) -
-                COALESCE(SUM(CASE WHEN type = 'deduct' THEN amount ELSE 0 END), 0) AS net
-         FROM point_transactions
-         WHERE user_id = ? AND source = 'event_join' AND source_id = ?`
-      ).bind(userId, id).first<{ net: number }>();
-      if (netCheck && netCheck.net > 0) {
-        await revokeActivityPoints(c.env.DB, userId, 'event_join', id);
-      }
+      // 참가 취소 시 포인트 회수 없음 (일정 참가 포인트는 취소해도 유지)
       return success(c, { joined: false, message: '참가가 취소되었습니다.' });
     }
 
