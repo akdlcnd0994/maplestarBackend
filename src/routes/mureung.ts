@@ -509,9 +509,11 @@ mureungRoutes.get('/overall', async (c) => {
         ORDER BY round_start DESC LIMIT 1
       ),
       rc_latest AS (
-        SELECT username, userlevel, userguild, MAX(userdate) AS latest_date
-        FROM ranking_characters
-        GROUP BY username
+        SELECT username, userlevel, userguild FROM (
+          SELECT username, userlevel, userguild,
+                 ROW_NUMBER() OVER (PARTITION BY username ORDER BY userdate DESC, usertime DESC) AS rn
+          FROM ranking_characters
+        ) WHERE rn = 1
       )
       SELECT
         cur.*,
@@ -577,9 +579,11 @@ mureungRoutes.get('/job', async (c) => {
         ORDER BY round_start DESC LIMIT 1
       ),
       rc_latest AS (
-        SELECT username, userlevel, userguild, MAX(userdate) AS latest_date
-        FROM ranking_characters
-        GROUP BY username
+        SELECT username, userlevel, userguild FROM (
+          SELECT username, userlevel, userguild,
+                 ROW_NUMBER() OVER (PARTITION BY username ORDER BY userdate DESC, usertime DESC) AS rn
+          FROM ranking_characters
+        ) WHERE rn = 1
       )
       SELECT
         mr.rank, mr.username, mr.score, mr.job_name, mr.avatar_img, mr.usercode,
@@ -707,10 +711,12 @@ mureungRoutes.get('/guild-ranking', async (c) => {
     // 길드별 상위 30명 기준 메달 집계 + 총합 점수
     const { results: guildStats } = await c.env.DB.prepare(`
       WITH rc_latest AS (
-        SELECT username, userguild
-        FROM ranking_characters
-        WHERE userguild != '' AND userguild IS NOT NULL
-        GROUP BY username
+        SELECT username, userguild FROM (
+          SELECT username, userguild,
+                 ROW_NUMBER() OVER (PARTITION BY username ORDER BY userdate DESC, usertime DESC) AS rn
+          FROM ranking_characters
+          WHERE userguild != '' AND userguild IS NOT NULL
+        ) WHERE rn = 1
       ),
       round_entries AS (
         SELECT mr.job_group, mr.rank, mr.username, mr.score, mr.job_name, mr.avatar_img,
@@ -759,10 +765,12 @@ mureungRoutes.get('/guild-ranking', async (c) => {
     // 길드별 상위 30명 전체 (유저별 최고점 1행)
     const { results: medalMembers } = await c.env.DB.prepare(`
       WITH rc_latest AS (
-        SELECT username, userguild
-        FROM ranking_characters
-        WHERE userguild != '' AND userguild IS NOT NULL
-        GROUP BY username
+        SELECT username, userguild FROM (
+          SELECT username, userguild,
+                 ROW_NUMBER() OVER (PARTITION BY username ORDER BY userdate DESC, usertime DESC) AS rn
+          FROM ranking_characters
+          WHERE userguild != '' AND userguild IS NOT NULL
+        ) WHERE rn = 1
       ),
       round_entries AS (
         SELECT mr.rank, mr.username, mr.score, mr.job_name, mr.avatar_img,
