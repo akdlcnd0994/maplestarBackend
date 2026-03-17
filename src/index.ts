@@ -13,7 +13,7 @@ import { scrollRoutes } from './routes/scrolls';
 import { chaosRoutes } from './routes/chaos';
 import { incubatorRoutes } from './routes/incubator';
 import { rankingRoutes, scrapeAllRankings } from './routes/ranking';
-import { mureungRoutes, scrapeMureungRankings, MUREUNG_TOTAL_BATCHES, checkMureungRoundTransition } from './routes/mureung';
+import { mureungRoutes, scrapeMureungRankings, checkMureungRoundTransition } from './routes/mureung';
 import { pointRoutes } from './routes/points';
 import { shopRoutes } from './routes/shop';
 import { announcementRoutes } from './routes/announcements';
@@ -130,9 +130,8 @@ export default {
       ctx.waitUntil(scrapeAllRankings(env.DB));
 
     } else if (event.cron === '30 * * * *') {
-      // 매시 30분: 무릉도장 현재 회차 (12배치 순환, ~12시간마다 전체 갱신)
-      const batchIndex = hour % MUREUNG_TOTAL_BATCHES;
-      ctx.waitUntil(scrapeMureungRankings(env.DB, batchIndex));
+      // 매시 30분: 무릉도장 현재 회차 전체 직업군 갱신
+      ctx.waitUntil(scrapeMureungRankings(env.DB));
 
     } else if (event.cron === '45 1 * * *') {
       // 매일 01:45 UTC (10:45 KST): 무릉 회차 전환 감지
