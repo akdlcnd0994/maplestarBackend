@@ -521,7 +521,8 @@ export async function warmMureungPastRoundsCache(
       continue;
     }
 
-    await Promise.all(uncachedUrls.map(url => fetch(url)));
+    // body consume 필수 — 읽지 않으면 Workers가 요청을 완전히 처리하지 않아 cache.put 미실행
+    await Promise.all(uncachedUrls.map(url => fetch(url).then(r => r.text())));
     warmed++;
     console.log(`무릉 캐시 워밍 완료: 회차 ${roundId} (${uncachedUrls.length}개 워밍)`);
   }
