@@ -506,23 +506,24 @@ export async function warmMureungPastRoundsCache(
   let skipped = 0;
 
   for (const { id: roundId } of pastRounds) {
-    // overall 캐시 존재 여부로 해당 회차 전체 캐싱 완료 여부 판단
-    const overallUrl = `${workerHost}/api/mureung/overall?roundId=${roundId}`;
-    const cached = await caches.default.match(new Request(overallUrl));
-    if (cached) {
-      skipped++;
-      continue;
-    }
-
-    // 회차 내 URL들을 병렬 fetch → 기존 엔드포인트가 DB 조회 + cache.put 자동 처리
     const urls = [
       `${workerHost}/api/mureung/overall?roundId=${roundId}`,
       `${workerHost}/api/mureung/guild-ranking?roundId=${roundId}`,
       ...Object.keys(MUREUNG_JOB_GROUPS).map(jg => `${workerHost}/api/mureung/job?jobGroup=${jg}&roundId=${roundId}`),
     ];
-    await Promise.all(urls.map(url => fetch(url)));
+
+    // URL별 캐시 여부 개별 확인 → 없는 URL만 fetch
+    const cacheChecks = await Promise.all(urls.map(url => caches.default.match(new Request(url))));
+    const uncachedUrls = urls.filter((_, i) => !cacheChecks[i]);
+
+    if (uncachedUrls.length === 0) {
+      skipped++;
+      continue;
+    }
+
+    await Promise.all(uncachedUrls.map(url => fetch(url)));
     warmed++;
-    console.log(`무릉 캐시 워밍 완료: 회차 ${roundId}`);
+    console.log(`무릉 캐시 워밍 완료: 회차 ${roundId} (${uncachedUrls.length}개 워밍)`);
   }
 
   console.log(`무릉 캐시 워밍: ${warmed}회차 워밍, ${skipped}회차 스킵`);
