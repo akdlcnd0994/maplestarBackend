@@ -501,9 +501,19 @@ export async function invalidateCurrentRoundCache(workerHost: string): Promise<v
 
 // ==================== API 엔드포인트 ====================
 
-function setCacheHeaders(c: any, ttlSeconds: number) {
-  // private: 브라우저(프론트 메모리 캐시)만 사용, CDN 캐시 방지 (DB 업데이트 즉시 반영)
-  c.header('Cache-Control', `private, max-age=${ttlSeconds}`);
+const PAST_ROUND_TTL = 86400;   // 과거 회차: 24시간 (데이터 불변)
+const CURRENT_ROUND_TTL = 3600; // 현재 회차: 1시간 (35분 cron 무효화와 맞춤)
+
+/** Cache-Control 헤더를 포함한 JSON 응답 생성 및 서버 캐시 저장 */
+function cachedResponse(c: any, data: any, maxAge: number): Response {
+  const resp = new Response(JSON.stringify({ success: true, data }), {
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': `public, max-age=${maxAge}`,
+    },
+  });
+  c.executionCtx.waitUntil(caches.default.put(new Request(c.req.url), resp.clone()));
+  return resp;
 }
 
 // 현재 회차 전직업 종합랭킹 (개인 최고 점수 기준, 상위 50명)
@@ -568,16 +578,13 @@ mureungRoutes.get('/overall', async (c) => {
     `).bind(roundId, roundId).all();
 
     const isPast = round && !round.is_current;
-    // 현재 회차는 roundId 없는 URL로만 캐싱 (고정 URL이어야 35분 무효화 시 삭제 가능)
     const shouldCache = isPast || !roundParam;
 
-    const resp = success(c, { round, rankings: results });
-
     if (shouldCache) {
-      c.executionCtx.waitUntil(caches.default.put(new Request(c.req.url), resp.clone()));
+      const ttl = isPast ? PAST_ROUND_TTL : CURRENT_ROUND_TTL;
+      return cachedResponse(c, { round, rankings: results }, ttl);
     }
-
-    return resp;
+    return success(c, { round, rankings: results });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
@@ -652,19 +659,13 @@ mureungRoutes.get('/job', async (c) => {
 
     const isPast = round && !round.is_current;
     const shouldCache = isPast || !roundParam;
-
-    const resp = success(c, {
-      round,
-      jobGroup,
-      jobName: MUREUNG_JOB_GROUPS[jobGroup],
-      rankings: results,
-    });
+    const data = { round, jobGroup, jobName: MUREUNG_JOB_GROUPS[jobGroup], rankings: results };
 
     if (shouldCache) {
-      c.executionCtx.waitUntil(caches.default.put(new Request(c.req.url), resp.clone()));
+      const ttl = isPast ? PAST_ROUND_TTL : CURRENT_ROUND_TTL;
+      return cachedResponse(c, data, ttl);
     }
-
-    return resp;
+    return success(c, data);
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
@@ -689,8 +690,7 @@ mureungRoutes.get('/history', async (c) => {
       ORDER BY b.score DESC
       LIMIT 10
     `).all();
-    setCacheHeaders(c, 1800); // 역대 기록: 30분
-    return success(c, results);
+    return cachedResponse(c, results, 1800); // 역대 기록: 30분
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
@@ -702,8 +702,7 @@ mureungRoutes.get('/rounds', async (c) => {
     const { results } = await c.env.DB.prepare(
       'SELECT * FROM mureung_rounds ORDER BY round_start DESC LIMIT 50'
     ).all();
-    setCacheHeaders(c, 3600); // 회차 목록: 1시간
-    return success(c, results);
+    return cachedResponse(c, results, 3600); // 회차 목록: 1시간
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
@@ -863,13 +862,11 @@ mureungRoutes.get('/guild-ranking', async (c) => {
     const isPast = round && !round.is_current;
     const shouldCache = isPast || !roundParam;
 
-    const resp = success(c, { round, rankings: guildStats, medal_members: medalMembers });
-
     if (shouldCache) {
-      c.executionCtx.waitUntil(caches.default.put(new Request(c.req.url), resp.clone()));
+      const ttl = isPast ? PAST_ROUND_TTL : CURRENT_ROUND_TTL;
+      return cachedResponse(c, { round, rankings: guildStats, medal_members: medalMembers }, ttl);
     }
-
-    return resp;
+    return success(c, { round, rankings: guildStats, medal_members: medalMembers });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
