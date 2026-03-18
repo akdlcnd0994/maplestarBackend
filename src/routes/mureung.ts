@@ -501,7 +501,7 @@ export async function invalidateCurrentRoundCache(workerHost: string): Promise<v
 
 // ==================== API 엔드포인트 ====================
 
-const PAST_ROUND_TTL = 86400;   // 과거 회차: 24시간 (데이터 불변)
+const PAST_ROUND_TTL = 2419200; // 과거 회차: 28일 (데이터 불변)
 const CURRENT_ROUND_TTL = 3600; // 현재 회차: 1시간 (35분 cron 무효화와 맞춤)
 
 /** Cache-Control 헤더를 포함한 JSON 응답 생성 및 서버 캐시 저장 */
