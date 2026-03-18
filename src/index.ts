@@ -140,8 +140,9 @@ export default {
       ctx.waitUntil(invalidateCurrentRoundCache(host));
 
     } else if (event.cron === '45 1 * * *') {
-      // 매일 01:45 UTC (10:45 KST): 무릉 회차 전환 감지
-      ctx.waitUntil(checkMureungRoundTransition(env.DB));
+      // 매일 01:45 UTC (10:45 KST): 무릉 회차 전환 감지 (전환 시 이전 회차 자동 캐시 워밍)
+      const host = env.WORKER_HOST || 'https://api.maplestar.app';
+      ctx.waitUntil(checkMureungRoundTransition(env.DB, host));
     }
   },
 };

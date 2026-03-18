@@ -437,7 +437,8 @@ export async function scrapeAllMureungHistory(
  * - 다르면 회차 전환으로 판정 → DB 업데이트 (새 회차 등록, 이전 회차 is_current=0)
  */
 export async function checkMureungRoundTransition(
-  db: D1Database
+  db: D1Database,
+  workerHost: string
 ): Promise<{ transitioned: boolean; oldRound?: string; newRound?: string }> {
   try {
     const dbCurrent = await db
@@ -473,6 +474,11 @@ export async function checkMureungRoundTransition(
         `UPDATE mureung_rounds SET is_current = 1, scraped_at = ? WHERE round_key = ?`
       ).bind(scrapedAt, roundInfo.roundKey).run();
 
+      // 이전 회차 캐시 워밍 (회차 전환 시 한 번만 수행)
+      warmMureungPastRoundsCache(db, workerHost).catch(e =>
+        console.error('회차 전환 후 캐시 워밍 실패:', e)
+      );
+
       return { transitioned: true, oldRound: dbCurrent?.round_key, newRound: roundInfo.roundKey };
     }
 
@@ -482,6 +488,45 @@ export async function checkMureungRoundTransition(
     console.error('무릉 회차 전환 체크 실패:', e);
     return { transitioned: false };
   }
+}
+
+/**
+ * 과거 회차 서버 캐시 워밍
+ * 이미 캐시된 회차는 스킵, 없는 회차만 셀프 fetch → 기존 엔드포인트가 DB 조회 + cache.put 처리
+ */
+export async function warmMureungPastRoundsCache(
+  db: D1Database,
+  workerHost: string
+): Promise<{ warmed: number; skipped: number }> {
+  const { results: pastRounds } = await db
+    .prepare('SELECT id FROM mureung_rounds WHERE is_current = 0 ORDER BY round_start DESC')
+    .all<{ id: number }>();
+
+  let warmed = 0;
+  let skipped = 0;
+
+  for (const { id: roundId } of pastRounds) {
+    // overall 캐시 존재 여부로 해당 회차 전체 캐싱 완료 여부 판단
+    const overallUrl = `${workerHost}/api/mureung/overall?roundId=${roundId}`;
+    const cached = await caches.default.match(new Request(overallUrl));
+    if (cached) {
+      skipped++;
+      continue;
+    }
+
+    // 회차 내 URL들을 병렬 fetch → 기존 엔드포인트가 DB 조회 + cache.put 자동 처리
+    const urls = [
+      `${workerHost}/api/mureung/overall?roundId=${roundId}`,
+      `${workerHost}/api/mureung/guild-ranking?roundId=${roundId}`,
+      ...Object.keys(MUREUNG_JOB_GROUPS).map(jg => `${workerHost}/api/mureung/job?jobGroup=${jg}&roundId=${roundId}`),
+    ];
+    await Promise.all(urls.map(url => fetch(url)));
+    warmed++;
+    console.log(`무릉 캐시 워밍 완료: 회차 ${roundId}`);
+  }
+
+  console.log(`무릉 캐시 워밍: ${warmed}회차 워밍, ${skipped}회차 스킵`);
+  return { warmed, skipped };
 }
 
 /**
@@ -719,6 +764,22 @@ mureungRoutes.post('/scrape', authMiddleware, requireRole('master'), async (c) =
       message: `무릉 스크래핑 완료: ${result.total}건 저장, ${result.errors}건 오류`,
       batch: result.batch,
       round: result.round,
+    });
+  } catch (e: any) {
+    return error(c, 'SERVER_ERROR', e.message, 500);
+  }
+});
+
+// 과거 회차 캐시 워밍 (master 전용)
+// 이미 캐시된 회차는 스킵, 없는 회차만 DB 조회 후 캐싱
+mureungRoutes.post('/warm-cache', authMiddleware, requireRole('master'), async (c) => {
+  try {
+    const host = c.env.WORKER_HOST || 'https://api.maplestar.app';
+    const result = await warmMureungPastRoundsCache(c.env.DB, host);
+    return success(c, {
+      message: `캐시 워밍 완료: ${result.warmed}회차 워밍, ${result.skipped}회차 스킵`,
+      warmed: result.warmed,
+      skipped: result.skipped,
     });
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
