@@ -180,11 +180,12 @@ async function queryMureungOverall(db: D1Database, roundId: number) {
       ORDER BY round_start DESC LIMIT 1
     ),
     rc_latest AS (
-      SELECT username, userlevel, userguild FROM (
-        SELECT username, userlevel, userguild,
-               ROW_NUMBER() OVER (PARTITION BY username ORDER BY userdate DESC, usertime DESC) AS rn
-        FROM ranking_characters
-      ) WHERE rn = 1
+      SELECT r.username, r.userlevel, r.userguild
+      FROM ranking_characters r
+      INNER JOIN (
+        SELECT username, MAX(userdate || usertime) AS max_dt
+        FROM ranking_characters GROUP BY username
+      ) m ON r.username = m.username AND r.userdate || r.usertime = m.max_dt
     )
     SELECT cur.*, pr.rank AS prev_job_rank, rc.userlevel, rc.userguild
     FROM cur
@@ -211,11 +212,12 @@ async function queryMureungJob(db: D1Database, roundId: number, jobGroup: number
       ORDER BY round_start DESC LIMIT 1
     ),
     rc_latest AS (
-      SELECT username, userlevel, userguild FROM (
-        SELECT username, userlevel, userguild,
-               ROW_NUMBER() OVER (PARTITION BY username ORDER BY userdate DESC, usertime DESC) AS rn
-        FROM ranking_characters
-      ) WHERE rn = 1
+      SELECT r.username, r.userlevel, r.userguild
+      FROM ranking_characters r
+      INNER JOIN (
+        SELECT username, MAX(userdate || usertime) AS max_dt
+        FROM ranking_characters GROUP BY username
+      ) m ON r.username = m.username AND r.userdate || r.usertime = m.max_dt
     )
     SELECT mr.rank, mr.username, mr.score, mr.job_name, mr.avatar_img, mr.usercode,
       pr.rank AS prev_job_rank, rc.userlevel, rc.userguild
@@ -239,11 +241,13 @@ async function queryMureungGuildRanking(db: D1Database, roundId: number) {
 
   const { results: guildStats } = await db.prepare(`
     WITH rc_latest AS (
-      SELECT username, userguild FROM (
-        SELECT username, userguild,
-               ROW_NUMBER() OVER (PARTITION BY username ORDER BY userdate DESC, usertime DESC) AS rn
-        FROM ranking_characters WHERE userguild != '' AND userguild IS NOT NULL
-      ) WHERE rn = 1
+      SELECT r.username, r.userguild
+      FROM ranking_characters r
+      INNER JOIN (
+        SELECT username, MAX(userdate || usertime) AS max_dt
+        FROM ranking_characters WHERE userguild != '' AND userguild IS NOT NULL GROUP BY username
+      ) m ON r.username = m.username AND r.userdate || r.usertime = m.max_dt
+      WHERE r.userguild != '' AND r.userguild IS NOT NULL
     ),
     round_entries AS (
       SELECT mr.job_group, mr.rank, mr.username, mr.score, mr.job_name, mr.avatar_img, rc.userguild AS guild
@@ -271,11 +275,13 @@ async function queryMureungGuildRanking(db: D1Database, roundId: number) {
 
   const { results: medalMembers } = await db.prepare(`
     WITH rc_latest AS (
-      SELECT username, userguild FROM (
-        SELECT username, userguild,
-               ROW_NUMBER() OVER (PARTITION BY username ORDER BY userdate DESC, usertime DESC) AS rn
-        FROM ranking_characters WHERE userguild != '' AND userguild IS NOT NULL
-      ) WHERE rn = 1
+      SELECT r.username, r.userguild
+      FROM ranking_characters r
+      INNER JOIN (
+        SELECT username, MAX(userdate || usertime) AS max_dt
+        FROM ranking_characters WHERE userguild != '' AND userguild IS NOT NULL GROUP BY username
+      ) m ON r.username = m.username AND r.userdate || r.usertime = m.max_dt
+      WHERE r.userguild != '' AND r.userguild IS NOT NULL
     ),
     round_entries AS (
       SELECT mr.rank, mr.username, mr.score, mr.job_name, mr.avatar_img, rc.userguild AS guild
