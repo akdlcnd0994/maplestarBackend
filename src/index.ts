@@ -144,11 +144,6 @@ export default {
       const host = env.WORKER_HOST || 'https://api.maplestar.app';
       ctx.waitUntil(checkMureungRoundTransition(env.DB, host));
 
-    } else if (event.cron === '0 */2 * * *') {
-      // 매 2시간마다: 무릉 과거 회차 캐시 워밍
-      // 캐시 있는 URL은 즉시 스킵 (D1 쿼리 없음), Cloudflare Cache LRU eviction 대비
-      const host = env.WORKER_HOST || 'https://api.maplestar.app';
-      ctx.waitUntil(warmMureungPastRoundsCache(env.DB, host));
     }
   },
 };
