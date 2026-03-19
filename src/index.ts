@@ -13,7 +13,7 @@ import { scrollRoutes } from './routes/scrolls';
 import { chaosRoutes } from './routes/chaos';
 import { incubatorRoutes } from './routes/incubator';
 import { rankingRoutes, scrapeAllRankings } from './routes/ranking';
-import { mureungRoutes, scrapeMureungRankings, checkMureungRoundTransition, invalidateCurrentRoundCache, warmMureungPastRoundsCache } from './routes/mureung';
+import { mureungRoutes, scrapeMureungRankings, checkMureungRoundTransition, invalidateCurrentRoundCache } from './routes/mureung';
 import { pointRoutes } from './routes/points';
 import { shopRoutes } from './routes/shop';
 import { announcementRoutes } from './routes/announcements';
@@ -142,7 +142,7 @@ export default {
     } else if (event.cron === '45 1 * * *') {
       // 매일 01:45 UTC (10:45 KST): 무릉 회차 전환 감지 (전환 시 이전 회차 자동 캐시 워밍)
       const host = env.WORKER_HOST || 'https://api.maplestar.app';
-      ctx.waitUntil(checkMureungRoundTransition(env.DB, host));
+      ctx.waitUntil(checkMureungRoundTransition(env.DB, host, env.BUCKET));
 
     }
   },
