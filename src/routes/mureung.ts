@@ -528,22 +528,22 @@ export async function writeAllPastRoundsToR2(
       const data = await queryMureungOverall(db, roundId);
       await putToR2(bucket, r2KeyOverall(roundId), data);
     } catch (e) { console.error(`R2 저장 실패 overall roundId=${roundId}:`, e); }
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 500));
 
     // guild-ranking
     try {
       const data = await queryMureungGuildRanking(db, roundId);
       await putToR2(bucket, r2KeyGuild(roundId), data);
     } catch (e) { console.error(`R2 저장 실패 guild roundId=${roundId}:`, e); }
-    await new Promise(r => setTimeout(r, 50));
+    await new Promise(r => setTimeout(r, 500));
 
-    // 직업별 랭킹 (순차, 50ms delay)
+    // 직업별 랭킹 (순차, 500ms delay)
     for (const jg of Object.keys(MUREUNG_JOB_GROUPS)) {
       try {
         const jobGroup = parseInt(jg);
         const data = await queryMureungJob(db, roundId, jobGroup);
         await putToR2(bucket, r2KeyJob(roundId, jobGroup), data);
-        await new Promise(r => setTimeout(r, 50));
+        await new Promise(r => setTimeout(r, 500));
       } catch (e) { console.error(`R2 저장 실패 job=${jg} roundId=${roundId}:`, e); }
     }
 
@@ -821,6 +821,40 @@ mureungRoutes.post('/warm-cache', authMiddleware, requireRole('master'), async (
       .catch(e => console.error('R2 저장 실패:', e))
   );
   return success(c, { message: 'R2 저장을 백그라운드에서 시작했습니다. (이미 저장된 회차는 자동 스킵)' });
+});
+
+// 특정 회차 R2 저장 (master 전용) - 회차 하나씩 나눠서 저장할 때 사용
+mureungRoutes.post('/warm-cache/:roundId', authMiddleware, requireRole('master'), async (c) => {
+  if (!c.env.BUCKET) return error(c, 'NOT_CONFIGURED', 'R2 버킷이 설정되지 않았습니다.', 500);
+  const roundId = parseInt(c.req.param('roundId'));
+  if (isNaN(roundId)) return error(c, 'BAD_REQUEST', '유효하지 않은 roundId입니다.', 400);
+
+  const round = await c.env.DB.prepare('SELECT * FROM mureung_rounds WHERE id = ? AND is_current = 0')
+    .bind(roundId).first<{ id: number }>();
+  if (!round) return error(c, 'NOT_FOUND', '해당 과거 회차를 찾을 수 없습니다.', 404);
+
+  c.executionCtx.waitUntil((async () => {
+    try {
+      const overall = await queryMureungOverall(c.env.DB, roundId);
+      await putToR2(c.env.BUCKET!, r2KeyOverall(roundId), overall);
+      await new Promise(r => setTimeout(r, 500));
+
+      const guild = await queryMureungGuildRanking(c.env.DB, roundId);
+      await putToR2(c.env.BUCKET!, r2KeyGuild(roundId), guild);
+      await new Promise(r => setTimeout(r, 500));
+
+      for (const jg of Object.keys(MUREUNG_JOB_GROUPS)) {
+        const jobGroup = parseInt(jg);
+        const data = await queryMureungJob(c.env.DB, roundId, jobGroup);
+        await putToR2(c.env.BUCKET!, r2KeyJob(roundId, jobGroup), data);
+        await new Promise(r => setTimeout(r, 500));
+      }
+      console.log(`R2 저장 완료: 회차 ${roundId}`);
+    } catch (e) {
+      console.error(`R2 저장 실패 roundId=${roundId}:`, e);
+    }
+  })());
+  return success(c, { message: `회차 ${roundId} R2 저장을 백그라운드에서 시작했습니다.` });
 });
 
 // 역대 기록 전체 스크래핑 (master 전용)
