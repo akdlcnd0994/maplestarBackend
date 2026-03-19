@@ -658,7 +658,7 @@ export async function warmMureungPastRoundsCache(
       } catch (e) { console.error(`캐시 워밍 실패 guild-ranking roundId=${roundId}:`, e); }
     }
 
-    // 직업별 랭킹 순차
+    // 직업별 랭킹 순차 (쿼리 사이 50ms delay로 D1 과부하 방지)
     let jobWarmed = 0;
     for (let i = 0; i < jobGroupKeys.length; i++) {
       const jobUrl = jobUrls[i];
@@ -669,6 +669,7 @@ export async function warmMureungPastRoundsCache(
           const data = await queryMureungJob(db, roundId, jobGroup);
           await caches.default.put(new Request(jobUrl), makeJsonResp(data, PAST_ROUND_TTL));
           jobWarmed++;
+          await new Promise(r => setTimeout(r, 50)); // D1 숨통 확보
         } catch (e) { console.error(`캐시 워밍 실패 job=${jobGroupKeys[i]} roundId=${roundId}:`, e); }
       }
     }
