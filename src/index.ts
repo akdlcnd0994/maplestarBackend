@@ -13,7 +13,7 @@ import { scrollRoutes } from './routes/scrolls';
 import { chaosRoutes } from './routes/chaos';
 import { incubatorRoutes } from './routes/incubator';
 import { rankingRoutes, scrapeAllRankings } from './routes/ranking';
-import { mureungRoutes, scrapeMureungRankings, checkMureungRoundTransition, invalidateCurrentRoundCache } from './routes/mureung';
+import { mureungRoutes, scrapeMureungRankings, checkMureungRoundTransition, writeCurrentRoundToR2 } from './routes/mureung';
 import { pointRoutes } from './routes/points';
 import { shopRoutes } from './routes/shop';
 import { announcementRoutes } from './routes/announcements';
@@ -135,9 +135,10 @@ export default {
       ctx.waitUntil(scrapeMureungRankings(env.DB));
 
     } else if (event.cron === '35 * * * *') {
-      // 매시 35분: 무릉 현재 회차 캐시 무효화 (스크래핑 완료 후 새 데이터로 재캐싱 유도)
-      const host = env.WORKER_HOST || 'https://api.maplestar.app';
-      ctx.waitUntil(invalidateCurrentRoundCache(host));
+      // 매시 35분: 무릉 현재 회차 R2 갱신 (스크래핑(:30) 완료 후 D1 데이터를 R2 고정 키에 저장)
+      if (env.BUCKET) {
+        ctx.waitUntil(writeCurrentRoundToR2(env.DB, env.BUCKET));
+      }
 
     } else if (event.cron === '45 1 * * *') {
       // 매일 01:45 UTC (10:45 KST): 무릉 회차 전환 감지 (전환 시 이전 회차 자동 캐시 워밍)

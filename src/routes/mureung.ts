@@ -83,6 +83,11 @@ const r2KeyOverall = (roundId: number) => `mureung/overall/${roundId}.json`;
 const r2KeyGuild   = (roundId: number) => `mureung/guild/${roundId}.json`;
 const r2KeyJob     = (roundId: number, jobGroup: number) => `mureung/job/${roundId}/${jobGroup}.json`;
 
+// 현재 회차 전용 고정 키 (매시 5분 덮어씀)
+const R2_CURRENT_OVERALL = 'mureung/current/overall.json';
+const R2_CURRENT_GUILD   = 'mureung/current/guild.json';
+const r2KeyCurrentJob    = (jobGroup: number) => `mureung/current/job/${jobGroup}.json`;
+
 async function getFromR2(bucket: R2Bucket, key: string): Promise<any | null> {
   const obj = await bucket.get(key);
   if (!obj) return null;
@@ -556,17 +561,44 @@ export async function writeAllPastRoundsToR2(
 }
 
 /**
- * 현재 회차 서버 캐시 무효화 (매시 35분 실행)
+ * 현재 회차 데이터를 D1에서 읽어 R2 고정 키에 저장 (매시 5분 실행)
+ * 스크래핑(:00) 완료 후 갱신된 D1 데이터를 R2에 반영
  */
-export async function invalidateCurrentRoundCache(workerHost: string): Promise<void> {
-  const cache = caches.default;
-  const urls = [
-    `${workerHost}/api/mureung/overall`,
-    `${workerHost}/api/mureung/guild-ranking`,
-    ...Object.keys(MUREUNG_JOB_GROUPS).map(jg => `${workerHost}/api/mureung/job?jobGroup=${jg}`),
-  ];
-  const results = await Promise.all(urls.map(url => cache.delete(new Request(url))));
-  console.log(`무릉 현재 회차 캐시 무효화: ${results.filter(Boolean).length}/${urls.length}개 삭제`);
+export async function writeCurrentRoundToR2(
+  db: D1Database,
+  bucket: R2Bucket
+): Promise<{ success: boolean; roundId?: number }> {
+  try {
+    const current = await db
+      .prepare('SELECT id FROM mureung_rounds WHERE is_current = 1 ORDER BY round_start DESC LIMIT 1')
+      .first<{ id: number }>();
+    if (!current) {
+      console.log('무릉 현재 회차 R2 갱신: 현재 회차 없음');
+      return { success: false };
+    }
+    const roundId = current.id;
+
+    const [overallData, guildData] = await Promise.all([
+      queryMureungOverall(db, roundId),
+      queryMureungGuildRanking(db, roundId),
+    ]);
+    await Promise.all([
+      putToR2(bucket, R2_CURRENT_OVERALL, overallData),
+      putToR2(bucket, R2_CURRENT_GUILD, guildData),
+    ]);
+
+    for (const jg of Object.keys(MUREUNG_JOB_GROUPS)) {
+      const jobGroup = parseInt(jg);
+      const jobData = await queryMureungJob(db, roundId, jobGroup);
+      await putToR2(bucket, r2KeyCurrentJob(jobGroup), jobData);
+    }
+
+    console.log(`무릉 현재 회차 R2 갱신 완료: roundId=${roundId}`);
+    return { success: true, roundId };
+  } catch (e) {
+    console.error('무릉 현재 회차 R2 갱신 실패:', e);
+    return { success: false };
+  }
 }
 
 /**
@@ -611,6 +643,13 @@ export async function checkMureungRoundTransition(
         writeAllPastRoundsToR2(db, bucket).catch(e =>
           console.error('회차 전환 후 R2 저장 실패:', e)
         );
+        // 현재 회차 R2 고정 키 삭제 → 다음 :05 갱신 전까지 D1 fallback 사용
+        const jobDeleteKeys = Object.keys(MUREUNG_JOB_GROUPS).map(jg => bucket.delete(r2KeyCurrentJob(parseInt(jg))));
+        await Promise.all([
+          bucket.delete(R2_CURRENT_OVERALL),
+          bucket.delete(R2_CURRENT_GUILD),
+          ...jobDeleteKeys,
+        ]).catch(e => console.error('현재 회차 R2 키 삭제 실패:', e));
       }
 
       return { transitioned: true, oldRound: dbCurrent?.round_key, newRound: roundInfo.roundKey };
@@ -645,24 +684,20 @@ mureungRoutes.get('/overall', async (c) => {
       return success(c, data);
     }
 
-    // 현재 회차: caches.default
-    const cached = await caches.default.match(new Request(c.req.url));
-    if (cached) return cached;
-
-    let roundId: number | null = null;
-    if (roundParam) {
-      roundId = parseInt(roundParam);
-    } else {
-      const current = await c.env.DB.prepare(
-        'SELECT id FROM mureung_rounds WHERE is_current = 1 ORDER BY round_start DESC LIMIT 1'
-      ).first<{ id: number }>();
-      roundId = current?.id ?? null;
+    // 현재 회차: R2 고정 키에서 조회
+    if (c.env.BUCKET) {
+      const r2Data = await getFromR2(c.env.BUCKET, R2_CURRENT_OVERALL);
+      if (r2Data) return success(c, r2Data);
     }
 
-    if (!roundId) return success(c, { round: null, rankings: [] });
+    // R2 miss: D1 직접 조회 (fallback)
+    const current = await c.env.DB.prepare(
+      'SELECT id FROM mureung_rounds WHERE is_current = 1 ORDER BY round_start DESC LIMIT 1'
+    ).first<{ id: number }>();
+    if (!current) return success(c, { round: null, rankings: [] });
 
-    const data = await queryMureungOverall(c.env.DB, roundId);
-    return cachedResponse(c, data, CURRENT_ROUND_TTL);
+    const data = await queryMureungOverall(c.env.DB, current.id);
+    return success(c, data);
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
@@ -694,24 +729,20 @@ mureungRoutes.get('/job', async (c) => {
       return success(c, data);
     }
 
-    // 현재 회차: caches.default
-    const cached = await caches.default.match(new Request(c.req.url));
-    if (cached) return cached;
-
-    let roundId: number | null = null;
-    if (roundParam) {
-      roundId = parseInt(roundParam);
-    } else {
-      const current = await c.env.DB.prepare(
-        'SELECT id FROM mureung_rounds WHERE is_current = 1 ORDER BY round_start DESC LIMIT 1'
-      ).first<{ id: number }>();
-      roundId = current?.id ?? null;
+    // 현재 회차: R2 고정 키에서 조회
+    if (c.env.BUCKET) {
+      const r2Data = await getFromR2(c.env.BUCKET, r2KeyCurrentJob(jobGroup));
+      if (r2Data) return success(c, r2Data);
     }
 
-    if (!roundId) return success(c, { round: null, jobGroup, jobName: MUREUNG_JOB_GROUPS[jobGroup], rankings: [] });
+    // R2 miss: D1 직접 조회 (fallback)
+    const current = await c.env.DB.prepare(
+      'SELECT id FROM mureung_rounds WHERE is_current = 1 ORDER BY round_start DESC LIMIT 1'
+    ).first<{ id: number }>();
+    if (!current) return success(c, { round: null, jobGroup, jobName: MUREUNG_JOB_GROUPS[jobGroup], rankings: [] });
 
-    const data = await queryMureungJob(c.env.DB, roundId, jobGroup, parseInt(limitParam));
-    return cachedResponse(c, data, CURRENT_ROUND_TTL);
+    const data = await queryMureungJob(c.env.DB, current.id, jobGroup, parseInt(limitParam));
+    return success(c, data);
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
@@ -736,24 +767,20 @@ mureungRoutes.get('/guild-ranking', async (c) => {
       return success(c, data);
     }
 
-    // 현재 회차: caches.default
-    const cached = await caches.default.match(new Request(c.req.url));
-    if (cached) return cached;
-
-    let roundId: number | null = null;
-    if (roundParam) {
-      roundId = parseInt(roundParam);
-    } else {
-      const current = await c.env.DB.prepare(
-        'SELECT id FROM mureung_rounds WHERE is_current = 1 ORDER BY round_start DESC LIMIT 1'
-      ).first<{ id: number }>();
-      roundId = current?.id ?? null;
+    // 현재 회차: R2 고정 키에서 조회
+    if (c.env.BUCKET) {
+      const r2Data = await getFromR2(c.env.BUCKET, R2_CURRENT_GUILD);
+      if (r2Data) return success(c, r2Data);
     }
 
-    if (!roundId) return success(c, { round: null, rankings: [], medal_members: [] });
+    // R2 miss: D1 직접 조회 (fallback)
+    const current = await c.env.DB.prepare(
+      'SELECT id FROM mureung_rounds WHERE is_current = 1 ORDER BY round_start DESC LIMIT 1'
+    ).first<{ id: number }>();
+    if (!current) return success(c, { round: null, rankings: [], medal_members: [] });
 
-    const data = await queryMureungGuildRanking(c.env.DB, roundId);
-    return cachedResponse(c, data, CURRENT_ROUND_TTL);
+    const data = await queryMureungGuildRanking(c.env.DB, current.id);
+    return success(c, data);
   } catch (e: any) {
     return error(c, 'SERVER_ERROR', e.message, 500);
   }
