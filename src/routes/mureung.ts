@@ -36,6 +36,7 @@ const KNOWN_MUREUNG_HISTORY = [
   { mureungId: '20260126', bossName: '자쿰',        roundStart: '2026-01-26', roundEnd: '2026-02-09' },
   { mureungId: '20260209', bossName: '혼테일',      roundStart: '2026-02-09', roundEnd: '2026-02-23' },
   { mureungId: '20260223', bossName: '반레온',      roundStart: '2026-02-23', roundEnd: '2026-03-09' },
+  { mureungId: '20260309', bossName: '핑크빈',      roundStart: '2026-03-09', roundEnd: '2026-03-23' },
 ];
 
 const MAX_PAGE = 20;
@@ -120,7 +121,7 @@ function parseRoundInfo(html: string): RoundInfo | null {
   const [yr, mo, dy] = roundStart.split('-');
   const startMDY = `${parseInt(mo)}/${parseInt(dy)}/${yr}`;
   const bossMatch = html.match(
-    new RegExp(startMDY.replace(/\//g, '\\/') + '~[\\d/]+\\s*\\(([^)]+)\\)')
+    new RegExp(startMDY.replace(/\//g, '\\/') + '\\s*~\\s*[\\d/]+\\s*\\(([^)]+)\\)')
   );
   const bossName = bossMatch ? bossMatch[1].trim() : '';
 
@@ -638,9 +639,9 @@ export async function checkMureungRoundTransition(
         `UPDATE mureung_rounds SET is_current = 1, scraped_at = ? WHERE round_key = ?`
       ).bind(scrapedAt, roundInfo.roundKey).run();
 
-      // 이전 회차를 R2에 자동 저장 (bucket이 있을 때만)
+      // 이전 회차를 R2에 자동 저장 (bucket이 있을 때만, Worker 종료 전 완료 보장을 위해 await)
       if (bucket) {
-        writeAllPastRoundsToR2(db, bucket).catch(e =>
+        await writeAllPastRoundsToR2(db, bucket).catch(e =>
           console.error('회차 전환 후 R2 저장 실패:', e)
         );
         // 현재 회차 R2 고정 키 삭제 → 다음 :05 갱신 전까지 D1 fallback 사용
