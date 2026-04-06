@@ -37,6 +37,31 @@ const KNOWN_MUREUNG_HISTORY = [
   { mureungId: '20260209', bossName: '혼테일',      roundStart: '2026-02-09', roundEnd: '2026-02-23' },
   { mureungId: '20260223', bossName: '반레온',      roundStart: '2026-02-23', roundEnd: '2026-03-09' },
   { mureungId: '20260309', bossName: '핑크빈',      roundStart: '2026-03-09', roundEnd: '2026-03-23' },
+  { mureungId: '20260323', bossName: '시그너스',    roundStart: '2026-03-23', roundEnd: '2026-04-06' },
+  { mureungId: '20260406', bossName: '아카이럼',    roundStart: '2026-04-06', roundEnd: '2026-04-20' },
+  { mureungId: '20260420', bossName: '모리 란마루', roundStart: '2026-04-20', roundEnd: '2026-05-04' },
+  { mureungId: '20260504', bossName: '자쿰',        roundStart: '2026-05-04', roundEnd: '2026-05-18' },
+  { mureungId: '20260518', bossName: '혼테일',      roundStart: '2026-05-18', roundEnd: '2026-06-01' },
+  { mureungId: '20260601', bossName: '반 레온',     roundStart: '2026-06-01', roundEnd: '2026-06-15' },
+  { mureungId: '20260615', bossName: '핑크빈',      roundStart: '2026-06-15', roundEnd: '2026-06-29' },
+  { mureungId: '20260629', bossName: '시그너스',    roundStart: '2026-06-29', roundEnd: '2026-07-13' },
+  { mureungId: '20260713', bossName: '아카이럼',    roundStart: '2026-07-13', roundEnd: '2026-07-27' },
+  { mureungId: '20260727', bossName: '모리 란마루', roundStart: '2026-07-27', roundEnd: '2026-08-10' },
+  { mureungId: '20260810', bossName: '자쿰',        roundStart: '2026-08-10', roundEnd: '2026-08-24' },
+  { mureungId: '20260824', bossName: '혼테일',      roundStart: '2026-08-24', roundEnd: '2026-09-07' },
+  { mureungId: '20260907', bossName: '반 레온',     roundStart: '2026-09-07', roundEnd: '2026-09-21' },
+  { mureungId: '20260921', bossName: '핑크빈',      roundStart: '2026-09-21', roundEnd: '2026-10-05' },
+  { mureungId: '20261005', bossName: '시그너스',    roundStart: '2026-10-05', roundEnd: '2026-10-19' },
+  { mureungId: '20261019', bossName: '아카이럼',    roundStart: '2026-10-19', roundEnd: '2026-11-02' },
+  { mureungId: '20261102', bossName: '모리 란마루', roundStart: '2026-11-02', roundEnd: '2026-11-16' },
+  { mureungId: '20261116', bossName: '자쿰',        roundStart: '2026-11-16', roundEnd: '2026-11-30' },
+  { mureungId: '20261130', bossName: '혼테일',      roundStart: '2026-11-30', roundEnd: '2026-12-14' },
+  { mureungId: '20261214', bossName: '반 레온',     roundStart: '2026-12-14', roundEnd: '2026-12-28' },
+  { mureungId: '20261228', bossName: '핑크빈',      roundStart: '2026-12-28', roundEnd: '2027-01-11' },
+  { mureungId: '20270111', bossName: '시그너스',    roundStart: '2027-01-11', roundEnd: '2027-01-25' },
+  { mureungId: '20270125', bossName: '아카이럼',    roundStart: '2027-01-25', roundEnd: '2027-02-08' },
+  { mureungId: '20270208', bossName: '모리 란마루', roundStart: '2027-02-08', roundEnd: '2027-02-22' },
+  { mureungId: '20270222', bossName: '자쿰',        roundStart: '2027-02-22', roundEnd: '2027-03-08' },
 ];
 
 const MAX_PAGE = 20;
@@ -125,7 +150,11 @@ function parseRoundInfo(html: string): RoundInfo | null {
   );
   const bossName = bossMatch ? bossMatch[1].trim() : '';
 
-  return { roundKey, roundStart, roundEnd, bossName };
+  // HTML 파싱 실패 시 KNOWN_MUREUNG_HISTORY에서 폴백
+  const resolvedBossName = bossName ||
+    (KNOWN_MUREUNG_HISTORY.find(h => h.roundStart === roundStart)?.bossName ?? '');
+
+  return { roundKey, roundStart, roundEnd, bossName: resolvedBossName };
 }
 
 function parseMureungHtml(html: string, jobGroup: number): MureungEntry[] {
