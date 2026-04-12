@@ -85,10 +85,9 @@ memberRoutes.get('/', async (c) => {
 
       // 멤버 닉네임과 매칭되는 랭킹 캐릭터 조회
       const rankingResults = await batchInQuery<any>(c.env.DB,
-        `SELECT rc.username, rc.userlevel, rc.userjob, rc.userrank, rc.userguild, rc.usercode, rc.avatar_img
-         FROM ranking_characters rc
-         INNER JOIN (SELECT username, MAX(userindex) as max_idx FROM ranking_characters WHERE username IN (__PH__) GROUP BY username) latest
-         ON rc.username = latest.username AND rc.userindex = latest.max_idx`,
+        `SELECT username, userlevel, userjob, userrank, userguild, usercode, avatar_img
+         FROM ranking_characters_latest
+         WHERE username IN (__PH__)`,
         names
       );
 
@@ -146,11 +145,10 @@ memberRoutes.get('/', async (c) => {
         if (allLinkedNames.size > 0) {
           const nameArr = [...allLinkedNames];
           const altResults = await batchInQuery<any>(c.env.DB,
-            `SELECT rc.username, rc.userlevel, rc.userjob, rc.userrank, rc.usercode, rc.avatar_img
-             FROM ranking_characters rc
-             INNER JOIN (SELECT username, MAX(userindex) as max_idx FROM ranking_characters WHERE username IN (__PH__) GROUP BY username) latest
-             ON rc.username = latest.username AND rc.userindex = latest.max_idx
-             ORDER BY rc.userlevel DESC`,
+            `SELECT username, userlevel, userjob, userrank, usercode, avatar_img
+             FROM ranking_characters_latest
+             WHERE username IN (__PH__)
+             ORDER BY userlevel DESC`,
             nameArr
           );
 
@@ -249,7 +247,7 @@ memberRoutes.get('/:id', async (c) => {
     // 랭킹 데이터로 본캐/부캐 정보 추가
     const memberData = member as any;
     const ranking = await c.env.DB.prepare(
-      'SELECT userlevel, userjob, userrank, userguild, usercode, avatar_img FROM ranking_characters WHERE username = ? ORDER BY userindex DESC LIMIT 1'
+      'SELECT userlevel, userjob, userrank, userguild, usercode, avatar_img FROM ranking_characters_latest WHERE username = ?'
     )
       .bind(memberData.character_name)
       .first<{ userlevel: number; userjob: string; userrank: number; userguild: string; usercode: string; avatar_img: string }>();
@@ -279,11 +277,10 @@ memberRoutes.get('/:id', async (c) => {
       if (allNames.length > 0) {
         const namePlaceholders = allNames.map(() => '?').join(',');
         const alts = await c.env.DB.prepare(
-          `SELECT rc.username, rc.userlevel, rc.userjob, rc.userrank, rc.avatar_img
-           FROM ranking_characters rc
-           INNER JOIN (SELECT username, MAX(userindex) as max_idx FROM ranking_characters WHERE username IN (${namePlaceholders}) GROUP BY username) latest
-           ON rc.username = latest.username AND rc.userindex = latest.max_idx
-           ORDER BY rc.userlevel DESC`
+          `SELECT username, userlevel, userjob, userrank, avatar_img
+           FROM ranking_characters_latest
+           WHERE username IN (${namePlaceholders})
+           ORDER BY userlevel DESC`
         ).bind(...allNames).all();
         memberData.alt_characters = alts.results;
       } else {

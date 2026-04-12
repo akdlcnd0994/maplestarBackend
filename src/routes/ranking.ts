@@ -156,7 +156,7 @@ export async function scrapeAllRankings(db: D1Database, batchIndex?: number): Pr
     }
   }
 
-  // INSERT: 히스토리 누적 (UPSERT 대신 매번 새 레코드 삽입)
+  // INSERT: 히스토리 누적
   for (let i = 0; i < allCharacters.length; i += BATCH_SIZE) {
     const batch = allCharacters.slice(i, i + BATCH_SIZE);
     const stmts = batch.map((char) =>
@@ -166,6 +166,24 @@ export async function scrapeAllRankings(db: D1Database, batchIndex?: number): Pr
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .bind(char.userrank, char.username, char.userlevel, char.userjob, char.userguild, char.userdate, char.usertime, char.usercode, char.avatar_img)
+    );
+    await db.batch(stmts);
+  }
+
+  // ranking_characters_latest 갱신 (캐릭터당 최신 1행 유지 — rc_latest 풀스캔 방지)
+  for (let i = 0; i < allCharacters.length; i += BATCH_SIZE) {
+    const batch = allCharacters.slice(i, i + BATCH_SIZE);
+    const stmts = batch.map((char) =>
+      db.prepare(
+        `INSERT INTO ranking_characters_latest (userrank, username, userlevel, userjob, userguild, userdate, usertime, usercode, avatar_img)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(username) DO UPDATE SET
+           userrank=excluded.userrank, userlevel=excluded.userlevel,
+           userjob=excluded.userjob, userguild=excluded.userguild,
+           userdate=excluded.userdate, usertime=excluded.usertime,
+           usercode=CASE WHEN excluded.usercode != '' THEN excluded.usercode ELSE ranking_characters_latest.usercode END,
+           avatar_img=CASE WHEN excluded.avatar_img != '' THEN excluded.avatar_img ELSE ranking_characters_latest.avatar_img END`
+      ).bind(char.userrank, char.username, char.userlevel, char.userjob, char.userguild, char.userdate, char.usertime, char.usercode, char.avatar_img)
     );
     await db.batch(stmts);
   }
@@ -200,10 +218,7 @@ rankingRoutes.get('/', async (c) => {
       const job = c.req.query('job');
       const limit = parseInt(c.req.query('limit') || '100');
 
-      let query = `SELECT rc.* FROM ranking_characters rc
-        INNER JOIN (SELECT username, MAX(userindex) as max_idx FROM ranking_characters GROUP BY username) latest
-        ON rc.username = latest.username AND rc.userindex = latest.max_idx
-        WHERE 1=1`;
+      let query = `SELECT * FROM ranking_characters_latest WHERE 1=1`;
       const params: any[] = [];
 
       if (username) {
